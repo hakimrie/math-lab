@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MathLab — Visual Math, Chaos & Fractals</title>
+  <meta name="description" content="Interactive mathematical laboratory exploring GPU fractals, Fourier epicycles, and chaotic double pendulum dynamics.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/src/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+</head>
+<body class="bg-space text-slate-100 font-sans antialiased overflow-hidden select-none">
+  <!-- Application Container -->
+  <div id="app" class="flex flex-col h-screen w-screen bg-[#07090e] text-[#e2e8f0]">
+    
+    <!-- Header -->
+    <header class="h-14 border-b border-[#1e293b]/70 bg-[#0c1017]/90 backdrop-blur px-4 flex items-center justify-between z-20 shrink-0">
+      <div class="flex items-center space-x-3">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 via-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 text-white font-bold text-lg">
+          ∫
+        </div>
+        <div>
+          <span class="font-extrabold text-base tracking-wide bg-gradient-to-r from-cyan-400 via-sky-300 to-indigo-300 bg-clip-text text-transparent">
+            MathLab
+          </span>
+          <span class="text-xs text-slate-500 ml-2 font-mono hidden sm:inline-block">v1.0 • Visual Playground</span>
+        </div>
+      </div>
+
+      <!-- Navigation tabs for experiments -->
+      <nav class="flex items-center space-x-1 sm:space-x-2 bg-[#131924] p-1 rounded-xl border border-slate-800">
+        <button id="nav-fractals" class="nav-tab active px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all flex items-center space-x-2">
+          <span class="w-2 h-2 rounded-full bg-cyan-400 indicator"></span>
+          <span>Fractal Zoomer</span>
+        </button>
+        <button id="nav-fourier" class="nav-tab px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all flex items-center space-x-2 text-slate-400 hover:text-slate-200">
+          <span class="w-2 h-2 rounded-full bg-purple-400 indicator hidden"></span>
+          <span>Fourier Epicycles</span>
+        </button>
+        <button id="nav-chaos" class="nav-tab px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all flex items-center space-x-2 text-slate-400 hover:text-slate-200">
+          <span class="w-2 h-2 rounded-full bg-amber-400 indicator hidden"></span>
+          <span>Chaos & Double Pendulum</span>
+        </button>
+      </nav>
+
+      <!-- Right actions -->
+      <div class="flex items-center space-x-2">
+        <button id="btn-fullscreen" title="Toggle Fullscreen" class="p-2 rounded-lg text-slate-400 hover:text-cyan-400 hover:bg-slate-800/60 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
+        </button>
+        <button id="btn-about" class="px-3 py-1.5 rounded-lg bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-300 border border-indigo-700/40 text-xs font-medium transition-colors flex items-center space-x-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          <span>About</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace Layout -->
+    <main class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+      
+      <!-- Experiment Viewport (Canvas Area) -->
+      <div id="viewport-container" class="flex-1 relative flex items-center justify-center bg-[#05070a] overflow-hidden">
+        
+        <!-- Active Viewport Canvas Target -->
+        <canvas id="main-canvas" class="w-full h-full block cursor-crosshair touch-none"></canvas>
+
+        <!-- Canvas Overlays (HUD / Status Badges) -->
+        <div id="canvas-hud" class="absolute top-4 left-4 pointer-events-none flex flex-col space-y-2">
+          <div id="hud-badge" class="px-2.5 py-1 rounded-md bg-black/60 backdrop-blur border border-white/10 text-xs font-mono text-cyan-300 shadow">
+            Ready
+          </div>
+          <div id="hud-coords" class="px-2.5 py-1 rounded-md bg-black/60 backdrop-blur border border-white/10 text-xs font-mono text-slate-400 shadow">
+            Coordinates: --
+          </div>
+        </div>
+
+        <!-- Floating Quick Controls for Viewport (Zoom In/Out, Reset, Play/Pause) -->
+        <div class="absolute bottom-4 right-4 flex items-center space-x-2 bg-[#0c1017]/80 backdrop-blur border border-slate-800 p-1.5 rounded-xl shadow-xl z-10">
+          <button id="vp-btn-playpause" title="Play / Pause" class="p-2 rounded-lg bg-cyan-600/30 text-cyan-300 hover:bg-cyan-600/50 transition-colors">
+            <svg id="vp-icon-pause" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <svg id="vp-icon-play" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          </button>
+          <button id="vp-btn-reset" title="Reset View / Simulation" class="p-2 rounded-lg bg-slate-800/80 text-slate-300 hover:bg-slate-700 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+          </button>
+          <div class="w-px h-5 bg-slate-700"></div>
+          <button id="vp-btn-zoomin" title="Zoom In" class="p-2 rounded-lg bg-slate-800/80 text-slate-300 hover:bg-slate-700 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+          </button>
+          <button id="vp-btn-zoomout" title="Zoom Out" class="p-2 rounded-lg bg-slate-800/80 text-slate-300 hover:bg-slate-700 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 12H6"></path></svg>
+          </button>
+        </div>
+
+        <!-- Live Drawing Overlay Helper for Fourier -->
+        <div id="drawing-hint" class="hidden absolute top-8 pointer-events-none bg-indigo-950/80 border border-indigo-500/30 px-4 py-2 rounded-full text-indigo-200 text-xs font-medium shadow-2xl backdrop-blur animate-pulse">
+          ✍️ Click & drag on canvas to draw any shape!
+        </div>
+      </div>
+
+      <!-- Right / Bottom Control & Educational Panel -->
+      <aside id="control-sidebar" class="w-full md:w-96 lg:w-[440px] border-t md:border-t-0 md:border-l border-[#1e293b]/70 bg-[#0a0e16] flex flex-col shrink-0 overflow-hidden z-10">
+        
+        <!-- Tab selector for Controls vs Educational Insights -->
+        <div class="flex border-b border-slate-800/80 bg-[#0d121c] p-1.5 shrink-0">
+          <button id="sidebar-tab-controls" class="sidebar-tab active flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-200 bg-slate-800/80 flex items-center justify-center space-x-1.5">
+            <svg class="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg>
+            <span>Lab Controls</span>
+          </button>
+          <button id="sidebar-tab-learn" class="sidebar-tab flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-slate-200 flex items-center justify-center space-x-1.5">
+            <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+            <span>Math & Theory</span>
+          </button>
+        </div>
+
+        <!-- Scrollable Content Container -->
+        <div id="sidebar-scroll" class="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-5">
+          
+          <!-- CONTROLS VIEW -->
+          <div id="panel-controls" class="space-y-5">
+            <!-- Dynamic Controls inserted by active experiment -->
+            <div id="dynamic-controls"></div>
+          </div>
+
+          <!-- EDUCATIONAL THEORY VIEW -->
+          <div id="panel-learn" class="space-y-4 hidden">
+            <!-- Dynamic Theory inserted by active experiment -->
+            <div id="dynamic-theory"></div>
+          </div>
+
+        </div>
+
+        <!-- Bottom status footer in sidebar -->
+        <div class="p-3 border-t border-slate-800/80 bg-[#090d14] flex items-center justify-between text-[11px] text-slate-500 font-mono shrink-0">
+          <span id="footer-fps">FPS: 60</span>
+          <span id="footer-engine">WebGL 2.0 / Canvas</span>
+        </div>
+      </aside>
+
+    </main>
+
+    <!-- About / Help Modal Dialog -->
+    <div id="about-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+      <div class="bg-[#0f141f] border border-slate-700/80 rounded-2xl max-w-xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-in">
+        <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-[#131926]">
+          <div class="flex items-center space-x-2.5">
+            <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-cyan-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">
+              ∫
+            </div>
+            <h3 class="text-base font-bold text-slate-100">About MathLab</h3>
+          </div>
+          <button id="modal-close" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+          </button>
+        </div>
+        <div class="p-6 overflow-y-auto space-y-4 text-sm text-slate-300 leading-relaxed custom-scrollbar">
+          <p>
+            <strong class="text-cyan-400">MathLab</strong> is a digital mathematics laboratory, interactive textbook, and creative visual sandbox built to transform abstract mathematical concepts into tangible, living simulations.
+          </p>
+          <div class="space-y-3 bg-[#0a0d14] p-4 rounded-xl border border-slate-800">
+            <h4 class="font-semibold text-slate-200 text-xs tracking-wider uppercase text-cyan-300">Three Signature Explorations:</h4>
+            <ul class="space-y-2 text-xs">
+              <li class="flex items-start space-x-2">
+                <span class="text-cyan-400 font-bold">1. Fractal Zoomer:</span>
+                <span>Hardware-accelerated GLSL shader rendering of the Mandelbrot, Julia, and Burning Ship sets with continuous smooth coloring and infinite zoom.</span>
+              </li>
+              <li class="flex items-start space-x-2">
+                <span class="text-purple-400 font-bold">2. Fourier Epicycles:</span>
+                <span>Freehand shape drawing decomposed via Discrete Fourier Transform into rotating complex vectors reconstructing your drawing circle by circle.</span>
+              </li>
+              <li class="flex items-start space-x-2">
+                <span class="text-amber-400 font-bold">3. Chaos & Double Pendulum:</span>
+                <span>Physics-accurate Lagrangian double pendulum integrated via 4th-order Runge-Kutta (RK4), featuring sensitivity to initial conditions and real-time divergence plots.</span>
+              </li>
+            </ul>
+          </div>
+          <p class="text-xs text-slate-400">
+            Built with pure modern web technologies (HTML5, WebGL 2.0, TypeScript, Canvas 2D, KaTeX) running 100% locally in your browser with zero latency and high-performance GPU shaders.
+          </p>
+        </div>
+        <div class="px-6 py-3 border-t border-slate-800 bg-[#0d121c] flex justify-end">
+          <button id="modal-ack" class="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition-colors">
+            Start Exploring
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "math-lab",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "katex": "^0.16.11",
+    "lucide": "^0.453.0"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.7",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
