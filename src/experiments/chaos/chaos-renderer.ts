@@ -12,6 +12,8 @@ export class ChaosRenderer implements Experiment {
   id = 'chaos';
   name = 'Chaos & Double Pendulum';
   badge = 'Deterministic Chaos';
+  category = 'Lagrangian Dynamics';
+  accentColor = '#fbbf24';
 
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
@@ -25,6 +27,9 @@ export class ChaosRenderer implements Experiment {
     g: 9.81,
     damping: 0.0002,
   };
+
+  // Simulation Mode: 'twin' | 'ensemble'
+  private simMode: 'twin' | 'ensemble' = 'twin';
 
   // State of Pendulum A (Primary)
   private stateA: PendulumState = {
@@ -42,6 +47,53 @@ export class ChaosRenderer implements Experiment {
     omega2: 0,
   };
 
+  serializeState(): Record<string, string | number | boolean> {
+    return {
+      mode: this.simMode,
+      th1: Number(((this.launchTheta1 * 180) / Math.PI).toFixed(2)),
+      th2: Number(((this.launchTheta2 * 180) / Math.PI).toFixed(2)),
+      l1: this.params.l1,
+      l2: this.params.l2,
+      m1: this.params.m1,
+      m2: this.params.m2,
+      g: this.params.g,
+      ensCount: this.ensembleCount,
+      ensDelta: Number((this.ensembleDeltaRad * 1e5).toFixed(2)),
+      speed: Number(this.simSpeed.toFixed(2)),
+      trail: this.showTrail,
+    };
+  }
+
+  deserializeState(state: Record<string, string>): void {
+    if (state.mode && (state.mode === 'twin' || state.mode === 'ensemble')) {
+      this.simMode = state.mode;
+    }
+    if (state.th1 !== undefined) {
+      this.launchTheta1 = (parseFloat(state.th1) * Math.PI) / 180;
+    }
+    if (state.th2 !== undefined) {
+      this.launchTheta2 = (parseFloat(state.th2) * Math.PI) / 180;
+    }
+    if (state.l1 !== undefined) this.params.l1 = parseFloat(state.l1);
+    if (state.l2 !== undefined) this.params.l2 = parseFloat(state.l2);
+    if (state.m1 !== undefined) this.params.m1 = parseFloat(state.m1);
+    if (state.m2 !== undefined) this.params.m2 = parseFloat(state.m2);
+    if (state.g !== undefined) this.params.g = parseFloat(state.g);
+    if (state.ensCount !== undefined) this.ensembleCount = parseInt(state.ensCount, 10);
+    if (state.ensDelta !== undefined) this.ensembleDeltaRad = parseFloat(state.ensDelta) * 1e-5;
+    if (state.speed !== undefined) this.simSpeed = parseFloat(state.speed);
+    if (state.trail !== undefined) this.showTrail = state.trail === 'true';
+
+    this.relaunchSimulation();
+    this.updateControlsUI();
+  }
+
+  // Multi-Pendulum Ensemble (Silk Ribbon)
+  private ensembleCount = 75;
+  private ensembleDeltaRad = 0.00001; // 10^-5 rad (~0.00057 deg)
+  private ensembleStates: PendulumState[] = [];
+  private ensembleTrails: { x: number; y: number }[][] = [];
+
   // Initial delta angle between twins (in degrees)
   private initialDeltaDeg = 0.001;
   private sensitivityMode = true;
@@ -53,6 +105,7 @@ export class ChaosRenderer implements Experiment {
   private trailLength = 500;
   private showTrail = true;
   private showGraph = true;
+  private showPhasePortrait = true;
 
   // Trajectory history for trails
   private trailA: { x: number; y: number }[] = [];
@@ -61,6 +114,19 @@ export class ChaosRenderer implements Experiment {
   // Divergence graph history: { t: number, dist: number }
   private divergenceHistory: { t: number; dist: number }[] = [];
   private maxGraphPoints = 300;
+
+  // Dual Phase Space History: (theta1, omega1) and (theta2, omega2)
+  private phaseHistory1: { theta: number; omega: number }[] = [];
+  private phaseHistory2: { theta: number; omega: number }[] = [];
+  private maxPhasePoints = 600;
+
+  // Poincaré Section Points on crossing theta1 = 0
+  private poincarePoints: { theta: number; omega: number }[] = [];
+  private maxPoincarePoints = 1200;
+  private prevTheta1 = 0;
+
+  // Initial Total Energy for conservation drift tracking
+  private initialEnergy = 0;
 
   // Dragging interaction
   private isDragging = false;
@@ -74,13 +140,13 @@ export class ChaosRenderer implements Experiment {
   private containerEl: HTMLElement | null = null;
 
   // Configured initial launch angles
-  private launchTheta1 = (120 * Math.PI) / 180;
-  private launchTheta2 = (120 * Math.PI) / 180;
+  private launchTheta1 = (135 * Math.PI) / 180;
+  private launchTheta2 = (135 * Math.PI) / 180;
 
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.relaunchTwins();
+    this.relaunchSimulation();
   }
 
   resize(width: number, height: number, dpr: number): void {
@@ -89,7 +155,7 @@ export class ChaosRenderer implements Experiment {
     this.canvas.height = Math.floor(height * dpr);
   }
 
-  relaunchTwins(): void {
+  relaunchSimulation(): void {
     const deltaRad = (this.initialDeltaDeg * Math.PI) / 180;
     this.stateA = {
       theta1: this.launchTheta1,
@@ -104,63 +170,119 @@ export class ChaosRenderer implements Experiment {
       omega2: 0,
     };
 
+    // Initialize Silk Ribbon Ensemble with 10^-5 rad microscopic dispersion
+    this.ensembleStates = [];
+    this.ensembleTrails = [];
+    for (let i = 0; i < this.ensembleCount; i++) {
+      const offset = (i - (this.ensembleCount - 1) / 2) * this.ensembleDeltaRad;
+      this.ensembleStates.push({
+        theta1: this.launchTheta1 + offset,
+        theta2: this.launchTheta2 + offset,
+        omega1: 0,
+        omega2: 0,
+      });
+      this.ensembleTrails.push([]);
+    }
+
     this.simTime = 0;
+    this.prevTheta1 = this.launchTheta1;
     this.trailA = [];
     this.trailB = [];
     this.divergenceHistory = [];
+    this.phaseHistory1 = [];
+    this.phaseHistory2 = [];
+    this.poincarePoints = [];
     this.isSimPlaying = true;
+    this.initialEnergy = computeTotalEnergy(this.stateA, this.params).total;
     this.updateControlsUI();
   }
 
   resetSimulation(): void {
-    this.relaunchTwins();
+    this.relaunchSimulation();
   }
 
   update(dt: number, _time: number): void {
     if (!this.isSimPlaying || this.isDragging) return;
 
-    // Safeguard against numerical NaN or Infinity
+    // Safeguard against numerical instability
     if (!Number.isFinite(this.stateA.theta1) || !Number.isFinite(this.stateA.omega1)) {
-      this.relaunchTwins();
-      return;
-    }
-    if (this.sensitivityMode && (!Number.isFinite(this.stateB.theta1) || !Number.isFinite(this.stateB.omega1))) {
-      this.relaunchTwins();
+      this.relaunchSimulation();
       return;
     }
 
-    // Sub-stepping for maximum RK4 stability & accuracy
-    const subSteps = 15;
+    // Sub-stepping for extreme RK4 energy conservation
+    const subSteps = 16;
     const scaledDt = (Math.min(dt, 0.05) * this.simSpeed) / subSteps;
 
-    for (let step = 0; step < subSteps; step++) {
-      // Step Pendulum A
-      this.stateA = rk4Step(this.stateA, this.params, scaledDt);
+    if (this.simMode === 'ensemble') {
+      for (let step = 0; step < subSteps; step++) {
+        for (let i = 0; i < this.ensembleStates.length; i++) {
+          this.ensembleStates[i] = rk4Step(this.ensembleStates[i], this.params, scaledDt);
+        }
+      }
+      // Record center state for HUD & audio
+      this.stateA = this.ensembleStates[Math.floor(this.ensembleStates.length / 2)] || this.stateA;
 
-      // Step Pendulum B if sensitivity mode active
+      // Record ensemble trails
+      for (let i = 0; i < this.ensembleStates.length; i++) {
+        const pos = getCartesianPositions(this.ensembleStates[i], this.params, 0, 0);
+        this.ensembleTrails[i].push({ x: pos.x2, y: pos.y2 });
+        if (this.ensembleTrails[i].length > Math.min(this.trailLength, 120)) {
+          this.ensembleTrails[i].shift();
+        }
+      }
+    } else {
+      // Twin mode
+      for (let step = 0; step < subSteps; step++) {
+        this.stateA = rk4Step(this.stateA, this.params, scaledDt);
+        if (this.sensitivityMode) {
+          this.stateB = rk4Step(this.stateB, this.params, scaledDt);
+        }
+      }
+
+      const posA = getCartesianPositions(this.stateA, this.params, 0, 0);
+      this.trailA.push({ x: posA.x2, y: posA.y2 });
+      if (this.trailA.length > this.trailLength) this.trailA.shift();
+
       if (this.sensitivityMode) {
-        this.stateB = rk4Step(this.stateB, this.params, scaledDt);
+        const posB = getCartesianPositions(this.stateB, this.params, 0, 0);
+        this.trailB.push({ x: posB.x2, y: posB.y2 });
+        if (this.trailB.length > this.trailLength) this.trailB.shift();
+
+        const dist = Math.hypot(posB.x2 - posA.x2, posB.y2 - posA.y2);
+        this.divergenceHistory.push({ t: this.simTime, dist });
+        if (this.divergenceHistory.length > this.maxGraphPoints) {
+          this.divergenceHistory.shift();
+        }
+      }
+    }
+
+    // Record Poincaré section crossings on theta1 = 0 downward with positive omega1
+    if (Math.sin(this.prevTheta1) < 0 && Math.sin(this.stateA.theta1) >= 0 && this.stateA.omega1 > 0) {
+      let th2 = ((this.stateA.theta2 + Math.PI) % (2 * Math.PI)) - Math.PI;
+      if (th2 < -Math.PI) th2 += 2 * Math.PI;
+      this.poincarePoints.push({ theta: th2, omega: this.stateA.omega2 });
+      if (this.poincarePoints.length > this.maxPoincarePoints) {
+        this.poincarePoints.shift();
       }
     }
 
     this.simTime += dt * this.simSpeed;
+    this.prevTheta1 = this.stateA.theta1;
 
-    // Calculate positions
-    const posA = getCartesianPositions(this.stateA, this.params, 0, 0);
-    this.trailA.push({ x: posA.x2, y: posA.y2 });
-    if (this.trailA.length > this.trailLength) this.trailA.shift();
+    // Record normalized phase space points for both arms
+    let wrappedTheta1 = ((this.stateA.theta1 + Math.PI) % (2 * Math.PI)) - Math.PI;
+    if (wrappedTheta1 < -Math.PI) wrappedTheta1 += 2 * Math.PI;
+    this.phaseHistory1.push({ theta: wrappedTheta1, omega: this.stateA.omega1 });
+    if (this.phaseHistory1.length > this.maxPhasePoints) {
+      this.phaseHistory1.shift();
+    }
 
-    if (this.sensitivityMode) {
-      const posB = getCartesianPositions(this.stateB, this.params, 0, 0);
-      this.trailB.push({ x: posB.x2, y: posB.y2 });
-      if (this.trailB.length > this.trailLength) this.trailB.shift();
-
-      // Record separation distance
-      const dist = Math.hypot(posB.x2 - posA.x2, posB.y2 - posA.y2);
-      this.divergenceHistory.push({ t: this.simTime, dist });
-      if (this.divergenceHistory.length > this.maxGraphPoints) {
-        this.divergenceHistory.shift();
-      }
+    let wrappedTheta2 = ((this.stateA.theta2 + Math.PI) % (2 * Math.PI)) - Math.PI;
+    if (wrappedTheta2 < -Math.PI) wrappedTheta2 += 2 * Math.PI;
+    this.phaseHistory2.push({ theta: wrappedTheta2, omega: this.stateA.omega2 });
+    if (this.phaseHistory2.length > this.maxPhasePoints) {
+      this.phaseHistory2.shift();
     }
   }
 
@@ -194,48 +316,20 @@ export class ChaosRenderer implements Experiment {
     );
     bgGlow.addColorStop(0, 'rgba(14, 165, 233, 0.05)');
     bgGlow.addColorStop(0.5, 'rgba(15, 23, 42, 0.02)');
-    bgGlow.addColorStop(1, 'rgba(5, 7, 13, 0.8)');
+    bgGlow.addColorStop(1, 'rgba(5, 7, 13, 0.85)');
     ctx.fillStyle = bgGlow;
     ctx.fillRect(0, 0, width, height);
 
-    // Draw Pendulum Simulation View
+    // Draw Pendulums in World Space
     ctx.save();
     ctx.translate(pivotScreenX, pivotScreenY);
     ctx.scale(this.zoomLevel, this.zoomLevel);
 
-    // Trails
-    if (this.showTrail) {
-      if (this.sensitivityMode && this.trailB.length > 1) {
-        this.drawTrail(ctx, this.trailB, 'rgba(244, 63, 94, ', '#f43f5e'); // Twin B: Magenta/Rose
-      }
-      if (this.trailA.length > 1) {
-        this.drawTrail(ctx, this.trailA, 'rgba(14, 165, 233, ', '#0ea5e9'); // Main A: Cyan
-      }
+    if (this.simMode === 'ensemble') {
+      this.renderEnsemble(ctx);
+    } else {
+      this.renderTwins(ctx);
     }
-
-    // Pendulum B (Twin)
-    if (this.sensitivityMode) {
-      const posB = getCartesianPositions(this.stateB, this.params, 0, 0);
-      this.drawPendulumBody(
-        ctx,
-        posB,
-        'rgba(244, 63, 94, 0.65)',
-        '#f43f5e',
-        '#fb7185',
-        false
-      );
-    }
-
-    // Pendulum A (Main)
-    const posA = getCartesianPositions(this.stateA, this.params, 0, 0);
-    this.drawPendulumBody(
-      ctx,
-      posA,
-      'rgba(56, 189, 248, 0.95)',
-      '#0ea5e9',
-      '#38bdf8',
-      true
-    );
 
     // Central Pivot Pin
     ctx.beginPath();
@@ -251,11 +345,149 @@ export class ChaosRenderer implements Experiment {
 
     ctx.restore();
 
-    // Real-time Divergence HUD Graph in bottom-left
-    if (this.sensitivityMode && this.showGraph) {
+    // HUD Overlays
+    if (this.simMode === 'twin' && this.sensitivityMode && this.showGraph) {
       this.drawDivergenceHUD(ctx, width, height);
     }
 
+    if (this.showPhasePortrait) {
+      this.drawDualPhaseAndPoincareHUD(ctx, width, height);
+    }
+
+    ctx.restore();
+  }
+
+  private renderTwins(ctx: CanvasRenderingContext2D): void {
+    // Trails
+    if (this.showTrail) {
+      if (this.sensitivityMode && this.trailB.length > 1) {
+        this.drawTrail(ctx, this.trailB, 'rgba(244, 63, 94, ', '#f43f5e'); // Twin B: Magenta/Rose
+      }
+      if (this.trailA.length > 1) {
+        this.drawTrail(ctx, this.trailA, 'rgba(14, 165, 233, ', '#0ea5e9'); // Main A: Cyan
+      }
+    }
+
+    // Pendulum B (Twin)
+    if (this.sensitivityMode) {
+      const posB = getCartesianPositions(this.stateB, this.params, 0, 0);
+      this.drawPendulumBody(ctx, posB, 'rgba(244, 63, 94, 0.65)', '#f43f5e', '#fb7185', false);
+    }
+
+    // Pendulum A (Main)
+    const posA = getCartesianPositions(this.stateA, this.params, 0, 0);
+    this.drawPendulumBody(ctx, posA, 'rgba(56, 189, 248, 0.95)', '#0ea5e9', '#38bdf8', true);
+  }
+
+  private renderEnsemble(ctx: CanvasRenderingContext2D): void {
+    const N = this.ensembleStates.length;
+    if (N === 0) return;
+
+    // Collect cartesian geometry for both joints across the full ensemble
+    const elbows: { x: number; y: number }[] = [];
+    const tips: { x: number; y: number }[] = [];
+
+    for (let i = 0; i < N; i++) {
+      const pos = getCartesianPositions(this.ensembleStates[i], this.params, 0, 0);
+      elbows.push({ x: pos.x1, y: pos.y1 });
+      tips.push({ x: pos.x2, y: pos.y2 });
+    }
+
+    // 1. Trails for sampled pendulums
+    if (this.showTrail) {
+      ctx.save();
+      ctx.lineWidth = 1.2 / this.zoomLevel;
+      const trailStep = Math.max(1, Math.floor(N / 24));
+      for (let i = 0; i < N; i += trailStep) {
+        const trail = this.ensembleTrails[i];
+        if (!trail || trail.length < 2) continue;
+        const hue = 180 + (i / (N - 1 || 1)) * 160;
+        ctx.beginPath();
+        ctx.moveTo(trail[0].x, trail[0].y);
+        for (let k = 1; k < trail.length; k++) {
+          ctx.lineTo(trail[k].x, trail[k].y);
+        }
+        ctx.strokeStyle = `hsla(${hue}, 90%, 65%, 0.18)`;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // 2. Continuous "Silk Ribbon" Quad Strip Mesh (Screen blend)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (let i = 0; i < N - 1; i++) {
+      const frac = i / (N - 1);
+      const hue = 180 + frac * 165; // Cyan (180) -> Violet (270) -> Rose (345)
+
+      // Quad polygon: elbow[i] -> tip[i] -> tip[i+1] -> elbow[i+1]
+      ctx.beginPath();
+      ctx.moveTo(elbows[i].x, elbows[i].y);
+      ctx.lineTo(tips[i].x, tips[i].y);
+      ctx.lineTo(tips[i + 1].x, tips[i + 1].y);
+      ctx.lineTo(elbows[i + 1].x, elbows[i + 1].y);
+      ctx.closePath();
+
+      ctx.fillStyle = `hsla(${hue}, 88%, 62%, 0.18)`;
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // 3. Sampled Physical Rods (every N/12 pendulums + boundaries)
+    const rodStep = Math.max(1, Math.floor(N / 12));
+    ctx.save();
+    for (let i = 0; i < N; i++) {
+      if (i % rodStep !== 0 && i !== N - 1) continue;
+      const hue = 180 + (i / (N - 1 || 1)) * 160;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(elbows[i].x, elbows[i].y);
+      ctx.lineTo(tips[i].x, tips[i].y);
+      ctx.strokeStyle = `hsla(${hue}, 90%, 75%, 0.35)`;
+      ctx.lineWidth = 1.0 / this.zoomLevel;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 4. Inner Elbow Wave Spine (Violet glow)
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(elbows[0].x, elbows[0].y);
+    for (let i = 1; i < N; i++) {
+      ctx.lineTo(elbows[i].x, elbows[i].y);
+    }
+    ctx.strokeStyle = 'rgba(192, 132, 252, 0.75)';
+    ctx.lineWidth = 1.8 / this.zoomLevel;
+    ctx.shadowColor = '#a855f7';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+    ctx.restore();
+
+    // 5. Outer Tip Silk Ribbon Spine (Luminous undulating wave with Cyan/White glow)
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(tips[0].x, tips[0].y);
+    for (let i = 1; i < N; i++) {
+      ctx.lineTo(tips[i].x, tips[i].y);
+    }
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = 2.4 / this.zoomLevel;
+    ctx.shadowColor = '#38bdf8';
+    ctx.shadowBlur = 12;
+    ctx.stroke();
+
+    // Tip beads for sampled pendulums
+    for (let i = 0; i < N; i++) {
+      if (i % 2 !== 0 && i !== N - 1) continue;
+      const hue = 180 + (i / (N - 1 || 1)) * 160;
+      ctx.beginPath();
+      ctx.arc(tips[i].x, tips[i].y, 2.5 / this.zoomLevel, 0, 2 * Math.PI);
+      ctx.fillStyle = `hsl(${hue}, 100%, 75%)`;
+      ctx.shadowColor = `hsl(${hue}, 100%, 60%)`;
+      ctx.shadowBlur = 6;
+      ctx.fill();
+    }
     ctx.restore();
   }
 
@@ -359,62 +591,220 @@ export class ChaosRenderer implements Experiment {
     ctx.font = '10px ui-monospace, SFMono-Regular, monospace';
     ctx.fillText('TRAJECTORY DIVERGENCE: ||r_B - r_A||', x0 + 10, y0 + 16);
 
-    const maxSep = (this.params.l1 + this.params.l2) * 2;
-    const curDist = this.divergenceHistory.length > 0
-      ? this.divergenceHistory[this.divergenceHistory.length - 1].dist
-      : 0;
+    // Current separation readout
+    const currentDist =
+      this.divergenceHistory.length > 0
+        ? this.divergenceHistory[this.divergenceHistory.length - 1].dist
+        : 0;
+    ctx.fillStyle = currentDist > 50 ? '#f43f5e' : '#38bdf8';
+    ctx.font = 'bold 11px ui-monospace, SFMono-Regular, monospace';
+    ctx.fillText(`Δr: ${currentDist.toFixed(1)} px`, x0 + graphW - 90, y0 + 16);
 
-    ctx.fillStyle = curDist > 20 ? '#f43f5e' : '#38bdf8';
-    ctx.fillText(`Δ: ${curDist.toFixed(1)} px`, x0 + graphW - 65, y0 + 16);
-
-    // Plot area
+    // Graph plotting area
     const plotX = x0 + 10;
     const plotY = y0 + 26;
     const plotW = graphW - 20;
     const plotH = graphH - 36;
 
-    // Grid line
-    ctx.strokeStyle = 'rgba(30, 41, 59, 0.7)';
+    // Grid lines
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.4)';
     ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(plotX, plotY + plotH / 2);
-    ctx.lineTo(plotX + plotW, plotY + plotH / 2);
-    ctx.stroke();
+    ctx.strokeRect(plotX, plotY, plotW, plotH);
 
-    // Plot curve
+    // Y max scale
+    const maxVal = Math.max(
+      100,
+      ...this.divergenceHistory.map((d) => d.dist),
+      (this.params.l1 + this.params.l2) * 2
+    );
+
+    // Plot line
     if (this.divergenceHistory.length > 1) {
       ctx.beginPath();
-      ctx.strokeStyle = '#f43f5e';
-      ctx.lineWidth = 1.5;
-
       for (let i = 0; i < this.divergenceHistory.length; i++) {
-        const item = this.divergenceHistory[i];
+        const d = this.divergenceHistory[i];
         const px = plotX + (i / (this.maxGraphPoints - 1)) * plotW;
-        // Normalize distance to plot height
-        const norm = Math.min(1, item.dist / maxSep);
-        const py = plotY + plotH - norm * plotH;
-
+        const py = plotY + plotH - (d.dist / maxVal) * plotH;
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.5;
       ctx.stroke();
     }
 
     ctx.restore();
   }
 
-  destroy(): void {
-    this.trailA = [];
-    this.trailB = [];
-    this.divergenceHistory = [];
+  private drawDualPhaseAndPoincareHUD(ctx: CanvasRenderingContext2D, width: number, _height: number): void {
+    const graphW = Math.min(350, width - 32);
+    const graphH = 160;
+    const pad = 16;
+    const x0 = width - graphW - pad;
+    const y0 = pad + 40;
+
+    ctx.save();
+
+    // Background card with glassmorphism
+    ctx.fillStyle = 'rgba(12, 16, 23, 0.90)';
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.75)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x0, y0, graphW, graphH, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    // Header label
+    ctx.fillStyle = '#c084fc';
+    ctx.font = '10px ui-monospace, SFMono-Regular, monospace';
+    ctx.fillText('DUAL PHASE SPACE & POINCARÉ CUT', x0 + 10, y0 + 16);
+
+    // Poincaré count badge
+    if (this.poincarePoints.length > 0) {
+      ctx.fillStyle = '#fbbf24';
+      ctx.font = 'bold 9.5px ui-monospace, SFMono-Regular, monospace';
+      ctx.fillText(`Poincaré: ${this.poincarePoints.length} pts`, x0 + graphW - 110, y0 + 16);
+    }
+
+    const subW = (graphW - 30) / 2;
+    const subH = graphH - 42;
+    const plotY = y0 + 28;
+    const maxOmega = 20;
+
+    // --- Sub-plot 1: Upper Arm Phase Space (theta1, omega1) ---
+    const p1X = x0 + 10;
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.5)';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(p1X, plotY, subW, subH);
+
+    // Crosshairs
+    ctx.beginPath();
+    ctx.moveTo(p1X, plotY + subH / 2);
+    ctx.lineTo(p1X + subW, plotY + subH / 2);
+    ctx.moveTo(p1X + subW / 2, plotY);
+    ctx.lineTo(p1X + subW / 2, plotY + subH);
+    ctx.stroke();
+
+    // Sub-plot 1 label
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = '9px ui-monospace, SFMono-Regular, monospace';
+    ctx.fillText('(θ₁, ω₁) Upper', p1X + 4, plotY + 10);
+
+    // Trace 1
+    if (this.phaseHistory1.length > 1) {
+      ctx.beginPath();
+      for (let i = 0; i < this.phaseHistory1.length; i++) {
+        const pt = this.phaseHistory1[i];
+        const nx = (pt.theta + Math.PI) / (2 * Math.PI);
+        const ny = 0.5 - pt.omega / (2 * maxOmega);
+        const px = p1X + Math.max(0, Math.min(subW, nx * subW));
+        const py = plotY + Math.max(0, Math.min(subH, ny * subH));
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+    }
+
+    // In ensemble mode: render live instantaneous phase filament loop
+    if (this.simMode === 'ensemble' && this.ensembleStates.length > 1) {
+      ctx.beginPath();
+      for (let i = 0; i < this.ensembleStates.length; i++) {
+        const s = this.ensembleStates[i];
+        let th = ((s.theta1 + Math.PI) % (2 * Math.PI)) - Math.PI;
+        if (th < -Math.PI) th += 2 * Math.PI;
+        const nx = (th + Math.PI) / (2 * Math.PI);
+        const ny = 0.5 - s.omega1 / (2 * maxOmega);
+        const px = p1X + Math.max(0, Math.min(subW, nx * subW));
+        const py = plotY + Math.max(0, Math.min(subH, ny * subH));
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    }
+
+    // --- Sub-plot 2: Lower Arm Phase Space (theta2, omega2) + Poincaré ---
+    const p2X = x0 + 10 + subW + 10;
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.5)';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(p2X, plotY, subW, subH);
+
+    // Crosshairs
+    ctx.beginPath();
+    ctx.moveTo(p2X, plotY + subH / 2);
+    ctx.lineTo(p2X + subW, plotY + subH / 2);
+    ctx.moveTo(p2X + subW / 2, plotY);
+    ctx.lineTo(p2X + subW / 2, plotY + subH);
+    ctx.stroke();
+
+    // Sub-plot 2 label
+    ctx.fillStyle = '#fbbf24';
+    ctx.font = '9px ui-monospace, SFMono-Regular, monospace';
+    ctx.fillText('(θ₂, ω₂) & Cut', p2X + 4, plotY + 10);
+
+    // Trace 2
+    if (this.phaseHistory2.length > 1) {
+      ctx.beginPath();
+      for (let i = 0; i < this.phaseHistory2.length; i++) {
+        const pt = this.phaseHistory2[i];
+        const nx = (pt.theta + Math.PI) / (2 * Math.PI);
+        const ny = 0.5 - pt.omega / (2 * maxOmega);
+        const px = p2X + Math.max(0, Math.min(subW, nx * subW));
+        const py = plotY + Math.max(0, Math.min(subH, ny * subH));
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = 'rgba(244, 63, 94, 0.55)';
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+    }
+
+    // In ensemble mode: render live instantaneous phase filament for Arm 2
+    if (this.simMode === 'ensemble' && this.ensembleStates.length > 1) {
+      ctx.beginPath();
+      for (let i = 0; i < this.ensembleStates.length; i++) {
+        const s = this.ensembleStates[i];
+        let th = ((s.theta2 + Math.PI) % (2 * Math.PI)) - Math.PI;
+        if (th < -Math.PI) th += 2 * Math.PI;
+        const nx = (th + Math.PI) / (2 * Math.PI);
+        const ny = 0.5 - s.omega2 / (2 * maxOmega);
+        const px = p2X + Math.max(0, Math.min(subW, nx * subW));
+        const py = plotY + Math.max(0, Math.min(subH, ny * subH));
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = '#f43f5e';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    }
+
+    // Render Gold Poincaré Surface of Section Points: (theta2, omega2) when theta1 = 0
+    if (this.poincarePoints.length > 0) {
+      ctx.fillStyle = '#fbbf24';
+      for (let i = 0; i < this.poincarePoints.length; i++) {
+        const pt = this.poincarePoints[i];
+        const nx = (pt.theta + Math.PI) / (2 * Math.PI);
+        const ny = 0.5 - pt.omega / (2 * maxOmega);
+        const px = p2X + Math.max(0, Math.min(subW, nx * subW));
+        const py = plotY + Math.max(0, Math.min(subH, ny * subH));
+        ctx.fillRect(px - 1, py - 1, 2, 2);
+      }
+    }
+
+    ctx.restore();
   }
 
   play(): void {
     this.isSimPlaying = true;
+    this.updateControlsUI();
   }
 
   pause(): void {
     this.isSimPlaying = false;
+    this.updateControlsUI();
   }
 
   isPlaying(): boolean {
@@ -428,24 +818,35 @@ export class ChaosRenderer implements Experiment {
   }
 
   reset(): void {
-    this.launchTheta1 = (120 * Math.PI) / 180;
-    this.launchTheta2 = (120 * Math.PI) / 180;
-    this.relaunchTwins();
+    this.relaunchSimulation();
+    this.updateControlsUI();
   }
 
   zoom(factor: number): void {
-    this.zoomLevel *= factor;
+    this.zoomLevel = Math.max(0.3, Math.min(4.0, this.zoomLevel * factor));
+  }
+
+  destroy(): void {
+    this.trailA = [];
+    this.trailB = [];
+    this.divergenceHistory = [];
+    this.phaseHistory1 = [];
+    this.phaseHistory2 = [];
+    this.poincarePoints = [];
+    this.ensembleStates = [];
+    this.ensembleTrails = [];
   }
 
   onPointerDown(e: PointerEvent): void {
-    if (!this.canvas) return;
+    if (this.simMode === 'ensemble') return; // Direct dragging disabled in ensemble mode for stability
     const dpr = window.devicePixelRatio || 1;
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.canvas?.getBoundingClientRect();
+    if (!rect || !this.canvas) return;
+
     const pivotX = this.canvas.width / (2 * dpr) + this.panX;
     const pivotY = this.canvas.height / (2.6 * dpr) + this.panY;
-
-    const mouseX = ((e.clientX - rect.left) - pivotX) / this.zoomLevel;
-    const mouseY = ((e.clientY - rect.top) - pivotY) / this.zoomLevel;
+    const mouseX = (e.clientX - rect.left - pivotX) / this.zoomLevel;
+    const mouseY = (e.clientY - rect.top - pivotY) / this.zoomLevel;
 
     const pos = getCartesianPositions(this.stateA, this.params, 0, 0);
     const d1 = Math.hypot(mouseX - pos.x1, mouseY - pos.y1);
@@ -467,16 +868,14 @@ export class ChaosRenderer implements Experiment {
     const pivotX = this.canvas.width / (2 * dpr) + this.panX;
     const pivotY = this.canvas.height / (2.6 * dpr) + this.panY;
 
-    const mouseX = ((e.clientX - rect.left) - pivotX) / this.zoomLevel;
-    const mouseY = ((e.clientY - rect.top) - pivotY) / this.zoomLevel;
+    const mouseX = (e.clientX - rect.left - pivotX) / this.zoomLevel;
+    const mouseY = (e.clientY - rect.top - pivotY) / this.zoomLevel;
 
     if (this.draggedBob === 1) {
-      // Direct angle to cursor
       this.stateA.theta1 = Math.atan2(mouseX, mouseY);
       this.stateA.omega1 = 0;
       this.stateA.omega2 = 0;
     } else if (this.draggedBob === 2) {
-      // Inverse kinematics orientation for arm 2 from arm 1 position
       const x1 = this.params.l1 * Math.sin(this.stateA.theta1);
       const y1 = this.params.l1 * Math.cos(this.stateA.theta1);
       this.stateA.theta2 = Math.atan2(mouseX - x1, mouseY - y1);
@@ -489,10 +888,9 @@ export class ChaosRenderer implements Experiment {
     if (this.isDragging) {
       this.isDragging = false;
       this.draggedBob = null;
-      // Store released angles as new launch baseline
       this.launchTheta1 = this.stateA.theta1;
       this.launchTheta2 = this.stateA.theta2;
-      this.relaunchTwins();
+      this.relaunchSimulation();
     }
   }
 
@@ -504,13 +902,21 @@ export class ChaosRenderer implements Experiment {
 
   getHudInfo(): { badge: string; coords: string } {
     const energy = computeTotalEnergy(this.stateA, this.params);
+    const drift = Math.abs(energy.total - this.initialEnergy);
     const th1Deg = ((this.stateA.theta1 * 180) / Math.PI).toFixed(1);
     const th2Deg = ((this.stateA.theta2 * 180) / Math.PI).toFixed(1);
     const status = this.isSimPlaying ? 'RUNNING' : 'STOPPED';
 
+    const modeStr =
+      this.simMode === 'ensemble'
+        ? `Ensemble (${this.ensembleCount} bobs)`
+        : 'Twin Butterfly';
+
+    const poincareStr = this.poincarePoints.length > 0 ? ` • Cut: ${this.poincarePoints.length} pts` : '';
+
     return {
-      badge: `[${status}] t: ${this.simTime.toFixed(1)}s • Energy: ${energy.total.toFixed(1)} J`,
-      coords: `θ₁: ${th1Deg}°, θ₂: ${th2Deg}° | Sensitivity Δθ₀: ${this.initialDeltaDeg}°`,
+      badge: `[${status}] ${modeStr} • t: ${this.simTime.toFixed(1)}s • E: ${energy.total.toFixed(1)} J (ΔE: ${drift.toFixed(3)} J)${poincareStr}`,
+      coords: `θ₁: ${th1Deg}°, θ₂: ${th2Deg}° | Perturbation: ${this.simMode === 'ensemble' ? `${(this.ensembleDeltaRad * 1e5).toFixed(1)}×10⁻⁵ rad` : `${this.initialDeltaDeg}°`}`,
     };
   }
 
@@ -536,39 +942,70 @@ export class ChaosRenderer implements Experiment {
           </button>
           <button id="btn-relaunch" class="btn-secondary flex-1 border-amber-600/50 hover:border-amber-500 text-amber-200">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-            <span>Relaunch Twins</span>
+            <span>Relaunch</span>
           </button>
         </div>
       </div>
 
-      <!-- Presets & Sensitivity Experiment Mode -->
+      <!-- Mode Selector: Twin vs Silk Ribbon Ensemble -->
       <div class="control-group">
         <div class="control-header">
           <span class="control-title">
-            <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-            Chaos Configuration
+            <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+            Experiment Mode
           </span>
         </div>
         <div class="space-y-3">
+          <div class="segmented-control">
+            <button id="mode-twin-btn" class="segmented-btn ${this.simMode === 'twin' ? 'active active-amber' : ''}">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+              <span>Twin Butterfly</span>
+            </button>
+            <button id="mode-ensemble-btn" class="segmented-btn ${this.simMode === 'ensemble' ? 'active active-amber' : ''}">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+              <span>Silk Ribbon</span>
+            </button>
+          </div>
+
+          <!-- Ensemble settings -->
+          <div id="ensemble-settings" class="${this.simMode === 'ensemble' ? '' : 'hidden'} space-y-3">
+            <div class="slider-container">
+              <div class="slider-label-row">
+                <span>Ensemble Size (Ribbon Strands)</span>
+                <span id="val-ensemble-count" class="slider-val">${this.ensembleCount} bobs</span>
+              </div>
+              <input type="range" id="slider-ensemble-count" min="20" max="120" step="5" value="${this.ensembleCount}">
+            </div>
+            <div class="slider-container">
+              <div class="slider-label-row">
+                <span>Micro-Perturbation (Δθ₀)</span>
+                <span id="val-ensemble-delta" class="slider-val">${(this.ensembleDeltaRad * 1e5).toFixed(1)} × 10⁻⁵ rad</span>
+              </div>
+              <input type="range" id="slider-ensemble-delta" min="0.1" max="10.0" step="0.1" value="${(this.ensembleDeltaRad * 1e5).toFixed(1)}">
+            </div>
+          </div>
+
+          <!-- Twin Settings -->
+          <div id="twin-settings" class="${this.simMode === 'twin' ? '' : 'hidden'} space-y-3">
+            <label class="toggle-switch">
+              <span>Sensitivity Twin Test (Butterfly Effect)</span>
+              <input type="checkbox" id="toggle-sensitivity" class="switch-input" ${this.sensitivityMode ? 'checked' : ''}>
+            </label>
+            <div class="slider-container" id="box-delta-theta">
+              <div class="slider-label-row">
+                <span>Initial Angular Difference (Δθ₀)</span>
+                <span id="val-delta-theta" class="slider-val">${this.initialDeltaDeg}°</span>
+              </div>
+              <input type="range" id="slider-delta-theta" min="0.0001" max="0.05" step="0.0005" value="${this.initialDeltaDeg}">
+            </div>
+          </div>
+
           <div>
             <label class="block text-xs font-mono text-slate-400 mb-1">Dynamic State Presets</label>
             <select id="chaos-preset-select">
               <option value="" disabled selected>Select a Physics Scenario...</option>
               ${CHAOS_PRESETS.map((p, idx) => `<option value="${idx}">${p.name}</option>`).join('')}
             </select>
-          </div>
-
-          <label class="toggle-switch">
-            <span>Sensitivity Twin Test (The Butterfly Effect)</span>
-            <input type="checkbox" id="toggle-sensitivity" class="switch-input" ${this.sensitivityMode ? 'checked' : ''}>
-          </label>
-
-          <div class="slider-container ${this.sensitivityMode ? '' : 'hidden'}" id="box-delta-theta">
-            <div class="slider-label-row">
-              <span>Initial Angular Difference (Δθ₀)</span>
-              <span id="val-delta-theta" class="slider-val">${this.initialDeltaDeg}°</span>
-            </div>
-            <input type="range" id="slider-delta-theta" min="0.0001" max="0.1" step="0.0005" value="${this.initialDeltaDeg}">
           </div>
         </div>
       </div>
@@ -674,18 +1111,25 @@ export class ChaosRenderer implements Experiment {
         <div class="control-header">
           <span class="control-title">
             <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-            Display & Trails
+            Display & Overlays
           </span>
-          <button id="btn-clear-trail" class="btn-secondary !py-0.5 !px-2 text-[11px]">Clear Trail</button>
+          <div class="flex items-center space-x-1.5">
+            <button id="btn-clear-poincare" class="btn-secondary !py-0.5 !px-2 text-[11px] text-amber-300 border-amber-600/50 hover:border-amber-400" title="Clear Poincaré surface of section points">Clear Cut</button>
+            <button id="btn-clear-trail" class="btn-secondary !py-0.5 !px-2 text-[11px]">Clear Trail</button>
+          </div>
         </div>
         <div class="space-y-3">
           <label class="toggle-switch">
-            <span>Show Glowing Trajectory Trails</span>
+            <span>Show Trajectory Trails</span>
             <input type="checkbox" id="toggle-trail" class="switch-input" ${this.showTrail ? 'checked' : ''}>
           </label>
           <label class="toggle-switch">
-            <span>Show Real-Time Divergence HUD Graph</span>
+            <span>Show Divergence HUD Graph</span>
             <input type="checkbox" id="toggle-graph" class="switch-input" ${this.showGraph ? 'checked' : ''}>
+          </label>
+          <label class="toggle-switch">
+            <span>Show Dual Phase Space & Poincaré Cut</span>
+            <input type="checkbox" id="toggle-phase" class="switch-input" ${this.showPhasePortrait ? 'checked' : ''}>
           </label>
           <div class="slider-container">
             <div class="slider-label-row">
@@ -702,10 +1146,54 @@ export class ChaosRenderer implements Experiment {
   bindControls(container: HTMLElement): void {
     this.containerEl = container;
 
-    // Play/Pause button
+    // Play/Pause
     const playPauseBtn = container.querySelector('#btn-chaos-playpause');
-    playPauseBtn?.addEventListener('click', () => {
-      this.togglePlay();
+    playPauseBtn?.addEventListener('click', () => this.togglePlay());
+
+    // Relaunch
+    const relaunchBtn = container.querySelector('#btn-relaunch');
+    relaunchBtn?.addEventListener('click', () => this.relaunchSimulation());
+
+    // Mode switching
+    const modeTwinBtn = container.querySelector('#mode-twin-btn');
+    const modeEnsembleBtn = container.querySelector('#mode-ensemble-btn');
+    const twinSettings = container.querySelector('#twin-settings');
+    const ensembleSettings = container.querySelector('#ensemble-settings');
+
+    modeTwinBtn?.addEventListener('click', () => {
+      this.simMode = 'twin';
+      modeTwinBtn.className = 'segmented-btn active active-amber';
+      if (modeEnsembleBtn) modeEnsembleBtn.className = 'segmented-btn';
+      twinSettings?.classList.remove('hidden');
+      ensembleSettings?.classList.add('hidden');
+      this.relaunchSimulation();
+    });
+
+    modeEnsembleBtn?.addEventListener('click', () => {
+      this.simMode = 'ensemble';
+      modeEnsembleBtn.className = 'segmented-btn active active-amber';
+      if (modeTwinBtn) modeTwinBtn.className = 'segmented-btn';
+      ensembleSettings?.classList.remove('hidden');
+      twinSettings?.classList.add('hidden');
+      this.relaunchSimulation();
+    });
+
+    // Ensemble slider listeners
+    const ensCountSlider = container.querySelector('#slider-ensemble-count') as HTMLInputElement | null;
+    const ensCountVal = container.querySelector('#val-ensemble-count');
+    ensCountSlider?.addEventListener('input', () => {
+      this.ensembleCount = parseInt(ensCountSlider.value, 10);
+      if (ensCountVal) ensCountVal.textContent = `${this.ensembleCount} bobs`;
+      this.relaunchSimulation();
+    });
+
+    const ensDeltaSlider = container.querySelector('#slider-ensemble-delta') as HTMLInputElement | null;
+    const ensDeltaVal = container.querySelector('#val-ensemble-delta');
+    ensDeltaSlider?.addEventListener('input', () => {
+      const val = parseFloat(ensDeltaSlider.value);
+      this.ensembleDeltaRad = val * 1e-5;
+      if (ensDeltaVal) ensDeltaVal.textContent = `${val.toFixed(1)} × 10⁻⁵ rad`;
+      this.relaunchSimulation();
     });
 
     // Preset selector
@@ -722,7 +1210,7 @@ export class ChaosRenderer implements Experiment {
         this.params.m2 = p.m2;
         this.params.g = p.g;
         this.params.damping = p.damping;
-        this.relaunchTwins();
+        this.relaunchSimulation();
         this.updateControlsUI();
       }
     });
@@ -732,12 +1220,9 @@ export class ChaosRenderer implements Experiment {
     const deltaBox = container.querySelector('#box-delta-theta');
     sensToggle?.addEventListener('change', () => {
       this.sensitivityMode = sensToggle.checked;
-      if (this.sensitivityMode) {
-        deltaBox?.classList.remove('hidden');
-      } else {
-        deltaBox?.classList.add('hidden');
-      }
-      this.relaunchTwins();
+      if (this.sensitivityMode) deltaBox?.classList.remove('hidden');
+      else deltaBox?.classList.add('hidden');
+      this.relaunchSimulation();
     });
 
     // Delta Theta slider
@@ -746,51 +1231,52 @@ export class ChaosRenderer implements Experiment {
     deltaSlider?.addEventListener('input', () => {
       this.initialDeltaDeg = parseFloat(deltaSlider.value);
       if (deltaVal) deltaVal.textContent = `${this.initialDeltaDeg}°`;
-      this.relaunchTwins();
+      this.relaunchSimulation();
     });
 
     // Angle sliders
     const th1Slider = container.querySelector('#slider-theta1') as HTMLInputElement | null;
-    const th2Slider = container.querySelector('#slider-theta2') as HTMLInputElement | null;
     const th1Val = container.querySelector('#val-theta1');
+    th1Slider?.addEventListener('input', () => {
+      const deg = parseFloat(th1Slider.value);
+      this.launchTheta1 = (deg * Math.PI) / 180;
+      if (th1Val) th1Val.textContent = `${deg}°`;
+      this.relaunchSimulation();
+    });
+
+    const th2Slider = container.querySelector('#slider-theta2') as HTMLInputElement | null;
     const th2Val = container.querySelector('#val-theta2');
+    th2Slider?.addEventListener('input', () => {
+      const deg = parseFloat(th2Slider.value);
+      this.launchTheta2 = (deg * Math.PI) / 180;
+      if (th2Val) th2Val.textContent = `${deg}°`;
+      this.relaunchSimulation();
+    });
 
-    const updateAngles = () => {
-      if (th1Slider && th2Slider) {
-        this.launchTheta1 = (parseFloat(th1Slider.value) * Math.PI) / 180;
-        this.launchTheta2 = (parseFloat(th2Slider.value) * Math.PI) / 180;
-        if (th1Val) th1Val.textContent = `${th1Slider.value}°`;
-        if (th2Val) th2Val.textContent = `${th2Slider.value}°`;
-        this.relaunchTwins();
-      }
-    };
-    th1Slider?.addEventListener('input', updateAngles);
-    th2Slider?.addEventListener('input', updateAngles);
-
-    // Physical parameter sliders
+    // Length and Mass Sliders
     const l1Slider = container.querySelector('#slider-l1') as HTMLInputElement | null;
-    const l2Slider = container.querySelector('#slider-l2') as HTMLInputElement | null;
     const l1Val = container.querySelector('#val-l1');
-    const l2Val = container.querySelector('#val-l2');
     l1Slider?.addEventListener('input', () => {
       this.params.l1 = parseFloat(l1Slider.value);
       if (l1Val) l1Val.textContent = String(this.params.l1);
-      this.relaunchTwins();
     });
+
+    const l2Slider = container.querySelector('#slider-l2') as HTMLInputElement | null;
+    const l2Val = container.querySelector('#val-l2');
     l2Slider?.addEventListener('input', () => {
       this.params.l2 = parseFloat(l2Slider.value);
       if (l2Val) l2Val.textContent = String(this.params.l2);
-      this.relaunchTwins();
     });
 
     const m1Slider = container.querySelector('#slider-m1') as HTMLInputElement | null;
-    const m2Slider = container.querySelector('#slider-m2') as HTMLInputElement | null;
     const m1Val = container.querySelector('#val-m1');
-    const m2Val = container.querySelector('#val-m2');
     m1Slider?.addEventListener('input', () => {
       this.params.m1 = parseFloat(m1Slider.value);
       if (m1Val) m1Val.textContent = `${this.params.m1.toFixed(1)} kg`;
     });
+
+    const m2Slider = container.querySelector('#slider-m2') as HTMLInputElement | null;
+    const m2Val = container.querySelector('#val-m2');
     m2Slider?.addEventListener('input', () => {
       this.params.m2 = parseFloat(m2Slider.value);
       if (m2Val) m2Val.textContent = `${this.params.m2.toFixed(1)} kg`;
@@ -817,7 +1303,7 @@ export class ChaosRenderer implements Experiment {
       if (simSpeedVal) simSpeedVal.textContent = `${this.simSpeed.toFixed(1)}x`;
     });
 
-    // Trail options
+    // Trail and HUD toggles
     const trailToggle = container.querySelector('#toggle-trail') as HTMLInputElement | null;
     trailToggle?.addEventListener('change', () => {
       this.showTrail = trailToggle.checked;
@@ -828,6 +1314,11 @@ export class ChaosRenderer implements Experiment {
       this.showGraph = graphToggle.checked;
     });
 
+    const phaseToggle = container.querySelector('#toggle-phase') as HTMLInputElement | null;
+    phaseToggle?.addEventListener('change', () => {
+      this.showPhasePortrait = phaseToggle.checked;
+    });
+
     const trailLenSlider = container.querySelector('#slider-trail-len') as HTMLInputElement | null;
     const trailLenVal = container.querySelector('#val-trail-len');
     trailLenSlider?.addEventListener('input', () => {
@@ -835,16 +1326,20 @@ export class ChaosRenderer implements Experiment {
       if (trailLenVal) trailLenVal.textContent = `${this.trailLength} pts`;
     });
 
+    const clearPoincareBtn = container.querySelector('#btn-clear-poincare');
+    clearPoincareBtn?.addEventListener('click', () => {
+      this.poincarePoints = [];
+    });
+
     const clearTrailBtn = container.querySelector('#btn-clear-trail');
     clearTrailBtn?.addEventListener('click', () => {
       this.trailA = [];
       this.trailB = [];
       this.divergenceHistory = [];
-    });
-
-    const relaunchBtn = container.querySelector('#btn-relaunch');
-    relaunchBtn?.addEventListener('click', () => {
-      this.relaunchTwins();
+      this.phaseHistory1 = [];
+      this.phaseHistory2 = [];
+      this.poincarePoints = [];
+      this.ensembleTrails = this.ensembleStates.map(() => []);
     });
 
     this.updateControlsUI();
@@ -853,7 +1348,6 @@ export class ChaosRenderer implements Experiment {
   private updateControlsUI(): void {
     if (!this.containerEl) return;
 
-    // Update status badge & play/pause button
     const badge = this.containerEl.querySelector('#chaos-status-badge');
     const playBtn = this.containerEl.querySelector('#btn-chaos-playpause');
     const playText = this.containerEl.querySelector('#chaos-btn-play-text');
@@ -877,19 +1371,6 @@ export class ChaosRenderer implements Experiment {
         playText.textContent = '▶ Run';
       }
     }
-
-    // Update sliders
-    const th1Slider = this.containerEl.querySelector('#slider-theta1') as HTMLInputElement | null;
-    const th2Slider = this.containerEl.querySelector('#slider-theta2') as HTMLInputElement | null;
-    const th1Val = this.containerEl.querySelector('#val-theta1');
-    const th2Val = this.containerEl.querySelector('#val-theta2');
-
-    const deg1 = Math.round((this.launchTheta1 * 180) / Math.PI);
-    const deg2 = Math.round((this.launchTheta2 * 180) / Math.PI);
-    if (th1Slider) th1Slider.value = String(deg1);
-    if (th2Slider) th2Slider.value = String(deg2);
-    if (th1Val) th1Val.textContent = `${deg1}°`;
-    if (th2Val) th2Val.textContent = `${deg2}°`;
   }
 
   getTheoryHTML(): string {
@@ -897,15 +1378,18 @@ export class ChaosRenderer implements Experiment {
       <!-- Theory 1 -->
       <div class="theory-card">
         <div class="theory-header">
-          <span>Deterministic Chaos vs. Randomness</span>
+          <span>Deterministic Chaos & The Silk Ribbon</span>
           <span class="text-xs text-amber-400 font-mono">01</span>
         </div>
         <div class="theory-content">
           <p>
-            A common misconception is that <em>chaos</em> means random, unpredictable dice rolls. In reality, the double pendulum is <strong>100% deterministic</strong>: its trajectory is governed strictly by Newton's and Euler-Lagrange's equations of motion without a single random number.
+            The double pendulum is <strong>100% deterministic</strong>: no random number generators exist in this simulation.
           </p>
           <p>
-            What makes it chaotic is <strong>extreme sensitivity to initial conditions</strong>: two states that start infinitesimally close diverge at an exponential rate over time.
+            In <strong>Silk Ribbon Ensemble Mode</strong>, an ensemble of 75 pendulums is released simultaneously with an imperceptible microscopic angular perturbation of $\\Delta\\theta_0 = 10^{-5}\\text{ rad}$ ($0.00057^\\circ$).
+          </p>
+          <p>
+            Initially, the pendulums oscillate in unison as an undulating, silky ribbon of light. Because the maximal Lyapunov exponent $\\lambda > 0$, the phase space volume shears, stretches, and folds, disintegrating the coherent fabric into deterministic chaos.
           </p>
         </div>
       </div>
@@ -918,16 +1402,13 @@ export class ChaosRenderer implements Experiment {
         </div>
         <div class="theory-content">
           <p>
-            For two connected pendulums with angles $\\theta_1$ and $\\theta_2$ relative to the downward vertical, the system's kinetic energy $T$ and potential energy $V$ define the Lagrangian $\\mathcal{L} = T - V$.
-          </p>
-          <p>
-            Applying Euler-Lagrange equations produces coupled non-linear differential equations:
+            For angles $\\theta_1, \\theta_2$ relative to downward vertical, kinetic energy $T$ and potential energy $V$ define the Lagrangian $\\mathcal{L} = T - V$:
           </p>
           <div class="math-block">
             $$\\frac{d}{dt}\\left(\\frac{\\partial \\mathcal{L}}{\\partial \\dot{\\theta}_i}\\right) - \\frac{\\partial \\mathcal{L}}{\\partial \\theta_i} = 0$$
           </div>
           <p>
-            The terms $\\sin(\\theta_1 - \\theta_2)$ and centrifugal coupling $\\dot{\\theta}^2$ introduce violent non-linear feedback whenever the system gains enough energy to loop over the top.
+            Centrifugal acceleration $\\dot{\\theta}^2$ and trigonometric coupling $\\sin(\\theta_1 - \\theta_2)$ introduce explosive non-linear feedback whenever the bobs flip over the horizontal plane.
           </p>
         </div>
       </div>
@@ -935,18 +1416,15 @@ export class ChaosRenderer implements Experiment {
       <!-- Theory 3 -->
       <div class="theory-card">
         <div class="theory-header">
-          <span>Lyapunov Exponent & The Butterfly Effect</span>
+          <span>Dual Phase Space & Poincaré Surface of Section</span>
           <span class="text-xs text-purple-400 font-mono">03</span>
         </div>
         <div class="theory-content">
           <p>
-            If two trajectories start with an initial separation $\\delta(0)$, their future divergence grows exponentially:
+            The upper-right HUD charts generalized coordinates $(\\theta_1, \\omega_1)$ and $(\\theta_2, \\omega_2)$. In ensemble mode, Liouville's theorem preserves the symplectic 2-form $d\\theta \\wedge d\\omega = \\text{const}$, deforming the initial line into a fractal filament.
           </p>
-          <div class="math-block">
-            $$\\|\\delta(t)\\| \\approx \\|\\delta(0)\\| e^{\\lambda t}$$
-          </div>
           <p>
-            where $\\lambda > 0$ is the <strong>maximal Lyapunov exponent</strong>. This sets an inescapable <em>predictability horizon</em>: even a microscopic uncertainty (like air thermal fluctuations or computer rounding at the 16th decimal place) doubles repeatedly until the long-term future becomes completely decoupled from predictions.
+            The golden dots in the right pane represent the <strong>Poincaré Surface of Section</strong>: points sampled whenever the upper arm crosses vertical $(\\theta_1 = 0)$ with $\\omega_1 > 0$. Over time, these stroboscopic punctures uncover the Cantor-like fractal cross-section of the chaotic attractor.
           </p>
         </div>
       </div>
@@ -954,15 +1432,12 @@ export class ChaosRenderer implements Experiment {
       <!-- Theory 4 -->
       <div class="theory-card">
         <div class="theory-header">
-          <span>Try This Experiment!</span>
-          <span class="text-xs text-amber-400 font-mono">04</span>
+          <span>Energy Conservation via RK4</span>
+          <span class="text-xs text-emerald-400 font-mono">04</span>
         </div>
         <div class="theory-content">
-          <p class="text-xs text-slate-300">
-            1. Keep <strong>Sensitivity Twin Test</strong> active with $\\Delta\\theta_0 = 0.001^\\circ$.<br>
-            2. Hit <strong>Relaunch Twins</strong> and watch the cyan and rose pendulums.<br>
-            3. For the first few seconds, they look like a single blended arm.<br>
-            4. Look at the <strong>Divergence Graph</strong> in the bottom-left corner: as soon as the first full loop occurs, the curve suddenly skyrockets exponentially, and the twins swing into completely opposite directions!
+          <p>
+            Total mechanical energy $E = T + V$ is tracked in real-time. Notice the $\\Delta E$ readout in the HUD: 16 sub-steps of 4th-order Runge-Kutta numerical integration ensure minimal numerical energy drift even through violent loops.
           </p>
         </div>
       </div>

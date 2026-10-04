@@ -1,16 +1,33 @@
 # MathLab — Visual Math, Chaos & Fractals
 
 > A visual mathematical playground that transforms abstract mathematical concepts into beautiful, interactive simulations.
+>
+> 🌐 **Live Hub**: [https://experiment.bukuanak.id/](https://experiment.bukuanak.id/)
 
 ![MathLab](public/favicon.svg)
 
-MathLab is built as a blend of a **digital mathematics laboratory, interactive textbook, and creative sandbox** designed for high-school and university students, educators, and curious learners.
+MathLab is built as a blend of a **digital mathematics laboratory, interactive textbook, and creative sandbox** designed for students, educators, and curious mathematical minds. Part of the [BukuAnak Experiments](https://experiment.bukuanak.id/) collection.
 
 ---
 
-## 🔬 Core Experiences
+## 🔬 Core Explorations
 
-### 1. Fractal Zoomer (GPU-Accelerated GLSL)
+### 1. 3D Strange Attractors & Differential Geometry (Chaos in $\mathbb{R}^3$)
+Explore non-linear vector fields and fractal attractors in three dimensions with real-time 3D orbital camera controls.
+* **Attractor Systems**:
+  * **Lorenz Attractor**: $\dot{x} = \sigma(y - x), \dot{y} = x(\rho - z) - y, \dot{z} = xy - \beta z$ (The quintessential butterfly of chaos)
+  * **Aizawa Attractor**: Toroidal sphere with an internal vortex and geyser jet along the vertical axis
+  * **Halvorsen Attractor**: 3-fold cyclic $\mathbb{Z}_3$ symmetry with three sweeping spiral lobes
+  * **Thomas Cyclically Symmetric**: Labyrinthine trigonometric chaos governed by coupled sine functions
+  * **Rössler Attractor**: Single-band Möbius-strip folding and stretching
+  * **Dadras Attractor**: 5-parameter autonomous dual-helix chaotic system
+* **Rendering & Interactivity**:
+  * 3D perspective projection with real-time mouse/touch orbital camera (azimuth, elevation, zoom)
+  * Multi-geometry modes: Particle Swarm (up to 6,000 live particles), Continuous Streamline Ribbon, and Twin Cloud (Lyapunov 3D divergence test)
+  * 5 spectral color schemes (Electric Cyan, Sunset Solar, Cyberpunk Neon, Emerald Abyss, Cosmic Violet)
+  * 3D orientation axis gizmo and auto-rotation orbit mode
+
+### 2. Fractal Zoomer (GPU-Accelerated GLSL)
 Explore infinite mathematical complexity rendered in real time on the GPU using WebGL 2.0 and GLSL fragment shaders.
 * **Fractals**:
   * **Mandelbrot Set**: $z_{n+1} = z_n^2 + c$, $z_0 = 0$
@@ -24,7 +41,7 @@ Explore infinite mathematical complexity rendered in real time on the GPU using 
   * Real-time palette cycling animation
   * Presets: Seahorse Valley, Elephant Valley, Triple Spiral, Douady's Rabbit, San Marco Dragon, Dendrite Tree, Siegel Disk
 
-### 2. Fourier Epicycles Drawing (Harmonic Analysis)
+### 3. Fourier Epicycles Drawing (Harmonic Analysis & Sound)
 Draw any shape with your mouse or touchscreen and watch Discrete Fourier Transform (DFT) mathematics decompose it into rotating complex vectors that retrace your drawing circle by circle.
 * **Algorithm**:
   * Uniform arc-length resampling of drawn 2D trajectories
@@ -35,19 +52,18 @@ Draw any shape with your mouse or touchscreen and watch Discrete Fourier Transfo
 * **Features**:
   * Freehand drawing canvas + preset vector shapes (5-Pointed Star, Cardioid Heart, Greek $\pi$, Trefoil Knot, Musical Note, Lemniscate)
   * Dynamic harmonic truncation slider (1 to $N$ components) with live Root Mean Square Error (RMSE) readout
-  * Animation speed, direction reversal, and visual toggles for epicycles, vectors, target path, and reconstructed curve
+  * **Web Audio Sonification**: Synthesizes harmonic overtone frequencies in real time matching the active epicycle frequencies
 
-### 3. Chaos & Double Pendulum (Lagrangian Dynamics)
+### 4. Chaos & Double Pendulum (Lagrangian Dynamics & Silk Ribbon)
 Experiment with non-linear dynamics, deterministic chaos, and sensitivity to initial conditions.
 * **Physics & Mathematics**:
   * Physically accurate Lagrangian equations of motion
-  * 4th-Order Runge-Kutta (RK4) numerical integration with sub-stepping for extreme energy conservation
-  * Mechanical energy tracking $E = T + V$
-* **Sensitivity Experiment (The Butterfly Effect)**:
-  * Simultaneous simulation of twin pendulums (A: Cyan, B: Rose) starting with an infinitesimal difference (e.g. $\Delta\theta_0 = 0.001^\circ$)
-  * Real-time Divergence HUD graph plotting $\|r_B(t) - r_A(t)\|$ over time, demonstrating the exponential Lyapunov divergence phase followed by chaotic saturation
-  * Interactive dragging of pendulum bobs directly in the canvas
-  * Adjustable parameters: arm lengths $L_1, L_2$, bob masses $m_1, m_2$, gravity $g$, viscous friction damping $b$
+  * 4th-Order Runge-Kutta (RK4) numerical integration with 16 sub-steps for extreme energy conservation
+  * Mechanical energy tracking $E = T + V$ with real-time conservation drift monitoring ($\Delta E$)
+* **Modes**:
+  * **Twin Butterfly Effect**: Twin pendulums starting with an infinitesimal difference (e.g. $\Delta\theta_0 = 0.001^\circ$) with real-time Divergence HUD graph
+  * **Multi-Pendulum Silk Ribbon (Ensemble)**: Simultaneous simulation of up to 80 pendulums released with micro-perturbations ($10^{-5}$ rad), forming an undulating rainbow silk ribbon that twists, shears, and splinters into chaos
+  * **Phase Space Portrait HUD**: Live plotting of $(\theta_1, \omega_1)$ showing limit cycles and chaotic attractor orbits
 
 ---
 
@@ -57,9 +73,24 @@ Experiment with non-linear dynamics, deterministic chaos, and sensitivity to ini
 * **Bundler & Tooling**: Vite
 * **Rendering**:
   * **WebGL 2.0 + GLSL**: GPU-accelerated fractal computation
-  * **HTML5 Canvas 2D**: High-performance 60 FPS vector paths, epicycles, and physical simulation
-* **Typography & Formulas**: KaTeX for LaTeX mathematical typesetting
+  * **HTML5 Canvas 2D + 3D Vector Math**: High-performance vector paths, epicycles, 3D projection, and physical simulation
+* **Audio**: Web Audio API for harmonic overtone and frequency synthesis
+* **Typography & Formulas**: KaTeX for LaTeX mathematical typesetting (100% offline bundled)
+* **Export**: High-Resolution 4K canvas snapshot export with mathematical watermark badge
 * **Zero Backend**: Runs 100% locally in the browser with zero latency
+
+---
+
+## ⌨️ Keyboard Shortcuts
+
+| Key | Action |
+| :--- | :--- |
+| `Space` | Play / Pause active simulation |
+| `R` | Reset current experiment |
+| `S` | Export high-resolution snapshot (.png) |
+| `M` | Toggle mathematical audio sonification |
+| `1` – `4` | Switch experiments (1: Fractals, 2: Fourier, 3: Chaos, 4: Attractors) |
+| `F` | Toggle Fullscreen |
 
 ---
 

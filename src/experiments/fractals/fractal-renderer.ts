@@ -6,6 +6,8 @@ export class FractalRenderer implements Experiment {
   id = 'fractals';
   name = 'Fractal Zoomer';
   badge = 'GPU Accelerated';
+  category = 'Complex Dynamics';
+  accentColor = '#22d3ee';
 
   private canvas: HTMLCanvasElement | null = null;
   private gl: WebGL2RenderingContext | null = null;
@@ -50,13 +52,39 @@ export class FractalRenderer implements Experiment {
   private lastMouseY = 0;
   private containerEl: HTMLElement | null = null;
 
+  serializeState(): Record<string, string | number | boolean> {
+    return {
+      type: this.fractalType,
+      cx: Number(this.centerX.toFixed(8)),
+      cy: Number(this.centerY.toFixed(8)),
+      zoom: Number(this.zoomLevel.toFixed(4)),
+      iter: this.maxIterations,
+      pal: this.palette,
+      jx: Number(this.juliaC[0].toFixed(5)),
+      jy: Number(this.juliaC[1].toFixed(5)),
+    };
+  }
+
+  deserializeState(state: Record<string, string>): void {
+    if (state.type !== undefined) this.fractalType = parseInt(state.type, 10);
+    if (state.cx !== undefined) this.centerX = parseFloat(state.cx);
+    if (state.cy !== undefined) this.centerY = parseFloat(state.cy);
+    if (state.zoom !== undefined) this.zoomLevel = parseFloat(state.zoom);
+    if (state.iter !== undefined) this.maxIterations = parseInt(state.iter, 10);
+    if (state.pal !== undefined) this.palette = parseInt(state.pal, 10);
+    if (state.jx !== undefined && state.jy !== undefined) {
+      this.juliaC = [parseFloat(state.jx), parseFloat(state.jy)];
+    }
+    this.syncUI();
+  }
+
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
     const gl = canvas.getContext('webgl2', {
       alpha: false,
       antialias: false,
       powerPreference: 'high-performance',
-      preserveDrawingBuffer: false,
+      preserveDrawingBuffer: true,
     });
 
     if (!gl) {
@@ -186,9 +214,23 @@ export class FractalRenderer implements Experiment {
   }
 
   reset(): void {
-    this.centerX = this.fractalType === 1 ? 0.0 : -0.5;
-    this.centerY = 0.0;
-    this.zoomLevel = this.fractalType === 1 ? 0.45 : 0.35;
+    if (this.fractalType === 1) {
+      this.centerX = 0.0;
+      this.centerY = 0.0;
+      this.zoomLevel = 0.45;
+    } else if (this.fractalType === 2) {
+      this.centerX = -0.45;
+      this.centerY = 0.5;
+      this.zoomLevel = 0.6;
+    } else if (this.fractalType === 3) {
+      this.centerX = 0.0;
+      this.centerY = 0.0;
+      this.zoomLevel = 0.4;
+    } else {
+      this.centerX = -0.5;
+      this.centerY = 0.0;
+      this.zoomLevel = 0.35;
+    }
     this.maxIterations = 200;
     this.syncUI();
   }
@@ -455,6 +497,15 @@ export class FractalRenderer implements Experiment {
           this.centerX = -0.5;
           this.centerY = 0.0;
           this.zoomLevel = 0.35;
+        } else if (this.fractalType === 2) {
+          this.centerX = -0.45;
+          this.centerY = 0.5;
+          this.zoomLevel = 0.6;
+          this.palette = 1; // Default to Sunset Magma (Fire) for Burning Ship
+        } else if (this.fractalType === 3) {
+          this.centerX = 0.0;
+          this.centerY = 0.0;
+          this.zoomLevel = 0.4;
         }
       }
       this.syncUI();
@@ -752,8 +803,27 @@ export class FractalRenderer implements Experiment {
       <!-- Educational Section 4 -->
       <div class="theory-card">
         <div class="theory-header">
+          <span>The Non-Analytic Burning Ship</span>
+          <span class="text-xs text-rose-400 font-mono">04</span>
+        </div>
+        <div class="theory-content">
+          <p>
+            First discovered by Michael Michelitsch and Otto Rössler in 1992, the <strong>Burning Ship fractal</strong> replaces standard complex squaring with absolute values on both components:
+          </p>
+          <div class="math-block">
+            $$z_{n+1} = (|\\text{Re}(z_n)| + i|\\text{Im}(z_n)|)^2 + c$$
+          </div>
+          <p>
+            Because the absolute value function $|x|$ has a sharp corner at 0, this mapping violates the Cauchy-Riemann equations and is <em>non-analytic</em>. As a result, the smooth conformal symmetry of the Mandelbrot set breaks down into jagged fiery hulls, towering masts, and the famous self-similar "Armadas" resting along horizontal and vertical reflection rays.
+          </p>
+        </div>
+      </div>
+
+      <!-- Educational Section 5 -->
+      <div class="theory-card">
+        <div class="theory-header">
           <span>Try This Experiment!</span>
-          <span class="text-xs text-cyan-400 font-mono">04</span>
+          <span class="text-xs text-cyan-400 font-mono">05</span>
         </div>
         <div class="theory-content">
           <p class="text-xs text-slate-300">

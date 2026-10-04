@@ -1,11 +1,14 @@
 import { Experiment } from '../experiment';
 import { Point2D, FourierComponent, resamplePath, computeDFT, evaluateEpicycles, computeRMSE } from '../../math/dft';
 import { FOURIER_PRESETS } from './presets';
+import { mathAudio } from '../../utils/audio-synthesizer';
 
 export class FourierRenderer implements Experiment {
   id = 'fourier';
   name = 'Fourier Epicycles';
   badge = 'Harmonic Analysis';
+  category = 'Harmonic Analysis';
+  accentColor = '#c084fc';
 
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
@@ -15,6 +18,42 @@ export class FourierRenderer implements Experiment {
   private userRawPoints: Point2D[] = [];
   private resampledPoints: Point2D[] = [];
   private fourierComponents: FourierComponent[] = [];
+  private currentPresetIdx = 1;
+
+  serializeState(): Record<string, string | number | boolean> {
+    return {
+      preset: this.currentPresetIdx,
+      order: this.componentCount,
+      speed: Number(this.animSpeed.toFixed(2)),
+      zoom: Number(this.zoomLevel.toFixed(3)),
+      circles: this.showCircles,
+      vectors: this.showVectors,
+    };
+  }
+
+  deserializeState(state: Record<string, string>): void {
+    if (state.preset !== undefined) {
+      const idx = parseInt(state.preset, 10);
+      this.currentPresetIdx = idx;
+      this.loadPreset(idx);
+    }
+    if (state.order !== undefined) {
+      this.componentCount = parseInt(state.order, 10);
+    }
+    if (state.speed !== undefined) {
+      this.animSpeed = parseFloat(state.speed);
+    }
+    if (state.zoom !== undefined) {
+      this.zoomLevel = parseFloat(state.zoom);
+    }
+    if (state.circles !== undefined) {
+      this.showCircles = state.circles === 'true';
+    }
+    if (state.vectors !== undefined) {
+      this.showVectors = state.vectors === 'true';
+    }
+    this.updateControlsUI();
+  }
 
   // Epicycle animation state
   private t = 0;
@@ -58,7 +97,10 @@ export class FourierRenderer implements Experiment {
   }
 
   update(dt: number, _time: number): void {
-    if (this.isDrawing) return;
+    if (this.isDrawing) {
+      mathAudio.silence();
+      return;
+    }
 
     if (this.isPlayingState && this.fourierComponents.length > 0) {
       // Advance t by dt * speed
@@ -70,11 +112,19 @@ export class FourierRenderer implements Experiment {
       const { tip } = evaluateEpicycles(this.fourierComponents, this.t, this.componentCount);
       this.trail.push(tip);
 
+      // Web Audio additive synthesis of active harmonics
+      mathAudio.updateFourierHarmonics(
+        this.fourierComponents.slice(0, 6).map((c) => ({ freq: c.freq, amp: c.amp })),
+        220
+      );
+
       // Keep trail length within one complete cycle
       const maxTrailPoints = Math.floor((6.0 / (this.animSpeed * dt || 0.016)) * 1.1) + 20;
       if (this.trail.length > Math.max(300, maxTrailPoints)) {
         this.trail.shift();
       }
+    } else {
+      mathAudio.silence();
     }
   }
 
@@ -257,6 +307,9 @@ export class FourierRenderer implements Experiment {
   }
 
   destroy(): void {
+    mathAudio.silence();
+    this.isDrawing = false;
+    this.isPanning = false;
     this.userRawPoints = [];
     this.resampledPoints = [];
     this.fourierComponents = [];
@@ -269,6 +322,7 @@ export class FourierRenderer implements Experiment {
 
   pause(): void {
     this.isPlayingState = false;
+    mathAudio.silence();
   }
 
   isPlaying(): boolean {
@@ -277,10 +331,12 @@ export class FourierRenderer implements Experiment {
 
   togglePlay(): boolean {
     this.isPlayingState = !this.isPlayingState;
+    if (!this.isPlayingState) mathAudio.silence();
     return this.isPlayingState;
   }
 
   reset(): void {
+    mathAudio.silence();
     this.t = 0;
     this.trail = [];
     this.panX = 0;
@@ -295,6 +351,11 @@ export class FourierRenderer implements Experiment {
   loadPreset(index: number): void {
     const preset = FOURIER_PRESETS[index];
     if (!preset) return;
+    this.currentPresetIdx = index;
+    this.isDrawing = false;
+    if (this.hintEl) {
+      this.hintEl.classList.add('hidden');
+    }
     this.userRawPoints = preset.generate();
     this.processPath();
   }

@@ -79,8 +79,12 @@ void main() {
     // Julia Set: z starts at coordinate, c is fixed
     z = coord;
     c = u_julia_c;
+  } else if (u_fractal_type == 2) {
+    // Burning Ship: z starts at 0, c has inverted y so the ship and masts rise upright
+    z = vec2(0.0);
+    c = vec2(coord.x, -coord.y);
   } else {
-    // Mandelbrot, Burning Ship, Tricorn: z starts at 0, c is coordinate
+    // Mandelbrot, Tricorn: z starts at 0, c is coordinate
     z = vec2(0.0);
     c = coord;
   }
@@ -108,8 +112,9 @@ void main() {
       z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
     } else if (u_fractal_type == 2) {
       // Burning Ship: z = (|Re(z)| + i|Im(z)|)^2 + c
+      // (|x| + i|y|)^2 = x^2 - y^2 + 2i|x||y|
       vec2 absZ = abs(z);
-      z = vec2(absZ.x * absZ.x - absZ.y * absZ.y, -2.0 * absZ.x * absZ.y) + c;
+      z = vec2(absZ.x * absZ.x - absZ.y * absZ.y, 2.0 * absZ.x * absZ.y) + c;
     } else if (u_fractal_type == 3) {
       // Tricorn: z = (conj(z))^2 + c = (x - iy)^2 + c
       z = vec2(z.x * z.x - z.y * z.y, -2.0 * z.x * z.y) + c;
