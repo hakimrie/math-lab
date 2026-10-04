@@ -73,10 +73,14 @@ export class ChaosRenderer implements Experiment {
 
   private containerEl: HTMLElement | null = null;
 
+  // Configured initial launch angles
+  private launchTheta1 = (120 * Math.PI) / 180;
+  private launchTheta2 = (120 * Math.PI) / 180;
+
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.resetSimulation();
+    this.relaunchTwins();
   }
 
   resize(width: number, height: number, dpr: number): void {
@@ -85,25 +89,45 @@ export class ChaosRenderer implements Experiment {
     this.canvas.height = Math.floor(height * dpr);
   }
 
-  resetSimulation(): void {
+  relaunchTwins(): void {
     const deltaRad = (this.initialDeltaDeg * Math.PI) / 180;
-    this.stateB = {
-      theta1: this.stateA.theta1 + deltaRad,
-      theta2: this.stateA.theta2 + deltaRad,
+    this.stateA = {
+      theta1: this.launchTheta1,
+      theta2: this.launchTheta2,
       omega1: 0,
       omega2: 0,
     };
-    this.stateA.omega1 = 0;
-    this.stateA.omega2 = 0;
+    this.stateB = {
+      theta1: this.launchTheta1 + deltaRad,
+      theta2: this.launchTheta2 + deltaRad,
+      omega1: 0,
+      omega2: 0,
+    };
 
     this.simTime = 0;
     this.trailA = [];
     this.trailB = [];
     this.divergenceHistory = [];
+    this.isSimPlaying = true;
+    this.updateControlsUI();
+  }
+
+  resetSimulation(): void {
+    this.relaunchTwins();
   }
 
   update(dt: number, _time: number): void {
     if (!this.isSimPlaying || this.isDragging) return;
+
+    // Safeguard against numerical NaN or Infinity
+    if (!Number.isFinite(this.stateA.theta1) || !Number.isFinite(this.stateA.omega1)) {
+      this.relaunchTwins();
+      return;
+    }
+    if (this.sensitivityMode && (!Number.isFinite(this.stateB.theta1) || !Number.isFinite(this.stateB.omega1))) {
+      this.relaunchTwins();
+      return;
+    }
 
     // Sub-stepping for maximum RK4 stability & accuracy
     const subSteps = 15;
@@ -399,13 +423,14 @@ export class ChaosRenderer implements Experiment {
 
   togglePlay(): boolean {
     this.isSimPlaying = !this.isSimPlaying;
+    this.updateControlsUI();
     return this.isSimPlaying;
   }
 
   reset(): void {
-    this.stateA.theta1 = (120 * Math.PI) / 180;
-    this.stateA.theta2 = (120 * Math.PI) / 180;
-    this.resetSimulation();
+    this.launchTheta1 = (120 * Math.PI) / 180;
+    this.launchTheta2 = (120 * Math.PI) / 180;
+    this.relaunchTwins();
   }
 
   zoom(factor: number): void {
@@ -458,15 +483,16 @@ export class ChaosRenderer implements Experiment {
       this.stateA.omega1 = 0;
       this.stateA.omega2 = 0;
     }
-
-    this.resetSimulation();
   }
 
   onPointerUp(_e: PointerEvent): void {
     if (this.isDragging) {
       this.isDragging = false;
       this.draggedBob = null;
-      this.resetSimulation();
+      // Store released angles as new launch baseline
+      this.launchTheta1 = this.stateA.theta1;
+      this.launchTheta2 = this.stateA.theta2;
+      this.relaunchTwins();
     }
   }
 
@@ -480,26 +506,48 @@ export class ChaosRenderer implements Experiment {
     const energy = computeTotalEnergy(this.stateA, this.params);
     const th1Deg = ((this.stateA.theta1 * 180) / Math.PI).toFixed(1);
     const th2Deg = ((this.stateA.theta2 * 180) / Math.PI).toFixed(1);
+    const status = this.isSimPlaying ? 'RUNNING' : 'STOPPED';
 
     return {
-      badge: `t: ${this.simTime.toFixed(1)}s • Energy: ${energy.total.toFixed(1)} J`,
+      badge: `[${status}] t: ${this.simTime.toFixed(1)}s • Energy: ${energy.total.toFixed(1)} J`,
       coords: `θ₁: ${th1Deg}°, θ₂: ${th2Deg}° | Sensitivity Δθ₀: ${this.initialDeltaDeg}°`,
     };
   }
 
   getControlsHTML(): string {
-    const th1Deg = Math.round((this.stateA.theta1 * 180) / Math.PI);
-    const th2Deg = Math.round((this.stateA.theta2 * 180) / Math.PI);
+    const th1Deg = Math.round((this.launchTheta1 * 180) / Math.PI);
+    const th2Deg = Math.round((this.launchTheta2 * 180) / Math.PI);
 
     return `
+      <!-- Master Control: Stop / Run / Reset -->
+      <div class="control-group !border-amber-500/40 bg-gradient-to-b from-[#131926] to-[#0a0e16]">
+        <div class="control-header">
+          <span class="control-title text-amber-300">
+            <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            Simulation Control
+          </span>
+          <span id="chaos-status-badge" class="px-2 py-0.5 rounded text-[10px] font-mono ${this.isSimPlaying ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/60' : 'bg-rose-950/60 text-rose-300 border border-rose-800/60'}">
+            ${this.isSimPlaying ? '● RUNNING' : '❚❚ STOPPED'}
+          </span>
+        </div>
+        <div class="flex space-x-2">
+          <button id="btn-chaos-playpause" class="btn-primary flex-1 ${this.isSimPlaying ? '!bg-rose-600 hover:!bg-rose-500' : '!bg-emerald-600 hover:!bg-emerald-500'}">
+            <span id="chaos-btn-play-text">${this.isSimPlaying ? '❚❚ Stop' : '▶ Run'}</span>
+          </button>
+          <button id="btn-relaunch" class="btn-secondary flex-1 border-amber-600/50 hover:border-amber-500 text-amber-200">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+            <span>Relaunch Twins</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Presets & Sensitivity Experiment Mode -->
       <div class="control-group">
         <div class="control-header">
           <span class="control-title">
             <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-            Chaos Experimentation
+            Chaos Configuration
           </span>
-          <button id="btn-relaunch" class="btn-secondary !py-0.5 !px-2 text-[11px]">Relaunch Twins</button>
         </div>
         <div class="space-y-3">
           <div>
@@ -654,22 +702,28 @@ export class ChaosRenderer implements Experiment {
   bindControls(container: HTMLElement): void {
     this.containerEl = container;
 
+    // Play/Pause button
+    const playPauseBtn = container.querySelector('#btn-chaos-playpause');
+    playPauseBtn?.addEventListener('click', () => {
+      this.togglePlay();
+    });
+
     // Preset selector
     const presetSelect = container.querySelector('#chaos-preset-select') as HTMLSelectElement | null;
     presetSelect?.addEventListener('change', () => {
       const idx = parseInt(presetSelect.value, 10);
       const p = CHAOS_PRESETS[idx];
       if (p) {
-        this.stateA.theta1 = (p.theta1Deg * Math.PI) / 180;
-        this.stateA.theta2 = (p.theta2Deg * Math.PI) / 180;
+        this.launchTheta1 = (p.theta1Deg * Math.PI) / 180;
+        this.launchTheta2 = (p.theta2Deg * Math.PI) / 180;
         this.params.l1 = p.l1;
         this.params.l2 = p.l2;
         this.params.m1 = p.m1;
         this.params.m2 = p.m2;
         this.params.g = p.g;
         this.params.damping = p.damping;
-        this.resetSimulation();
-        this.syncUI();
+        this.relaunchTwins();
+        this.updateControlsUI();
       }
     });
 
@@ -683,7 +737,7 @@ export class ChaosRenderer implements Experiment {
       } else {
         deltaBox?.classList.add('hidden');
       }
-      this.resetSimulation();
+      this.relaunchTwins();
     });
 
     // Delta Theta slider
@@ -692,7 +746,7 @@ export class ChaosRenderer implements Experiment {
     deltaSlider?.addEventListener('input', () => {
       this.initialDeltaDeg = parseFloat(deltaSlider.value);
       if (deltaVal) deltaVal.textContent = `${this.initialDeltaDeg}°`;
-      this.resetSimulation();
+      this.relaunchTwins();
     });
 
     // Angle sliders
@@ -703,11 +757,11 @@ export class ChaosRenderer implements Experiment {
 
     const updateAngles = () => {
       if (th1Slider && th2Slider) {
-        this.stateA.theta1 = (parseFloat(th1Slider.value) * Math.PI) / 180;
-        this.stateA.theta2 = (parseFloat(th2Slider.value) * Math.PI) / 180;
+        this.launchTheta1 = (parseFloat(th1Slider.value) * Math.PI) / 180;
+        this.launchTheta2 = (parseFloat(th2Slider.value) * Math.PI) / 180;
         if (th1Val) th1Val.textContent = `${th1Slider.value}°`;
         if (th2Val) th2Val.textContent = `${th2Slider.value}°`;
-        this.resetSimulation();
+        this.relaunchTwins();
       }
     };
     th1Slider?.addEventListener('input', updateAngles);
@@ -721,12 +775,12 @@ export class ChaosRenderer implements Experiment {
     l1Slider?.addEventListener('input', () => {
       this.params.l1 = parseFloat(l1Slider.value);
       if (l1Val) l1Val.textContent = String(this.params.l1);
-      this.resetSimulation();
+      this.relaunchTwins();
     });
     l2Slider?.addEventListener('input', () => {
       this.params.l2 = parseFloat(l2Slider.value);
       if (l2Val) l2Val.textContent = String(this.params.l2);
-      this.resetSimulation();
+      this.relaunchTwins();
     });
 
     const m1Slider = container.querySelector('#slider-m1') as HTMLInputElement | null;
@@ -790,19 +844,48 @@ export class ChaosRenderer implements Experiment {
 
     const relaunchBtn = container.querySelector('#btn-relaunch');
     relaunchBtn?.addEventListener('click', () => {
-      this.resetSimulation();
+      this.relaunchTwins();
     });
+
+    this.updateControlsUI();
   }
 
-  private syncUI(): void {
+  private updateControlsUI(): void {
     if (!this.containerEl) return;
+
+    // Update status badge & play/pause button
+    const badge = this.containerEl.querySelector('#chaos-status-badge');
+    const playBtn = this.containerEl.querySelector('#btn-chaos-playpause');
+    const playText = this.containerEl.querySelector('#chaos-btn-play-text');
+
+    if (badge) {
+      if (this.isSimPlaying) {
+        badge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/60 text-emerald-300 border border-emerald-800/60';
+        badge.textContent = '● RUNNING';
+      } else {
+        badge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-rose-950/60 text-rose-300 border border-rose-800/60';
+        badge.textContent = '❚❚ STOPPED';
+      }
+    }
+
+    if (playBtn && playText) {
+      if (this.isSimPlaying) {
+        playBtn.className = 'btn-primary flex-1 !bg-rose-600 hover:!bg-rose-500';
+        playText.textContent = '❚❚ Stop';
+      } else {
+        playBtn.className = 'btn-primary flex-1 !bg-emerald-600 hover:!bg-emerald-500';
+        playText.textContent = '▶ Run';
+      }
+    }
+
+    // Update sliders
     const th1Slider = this.containerEl.querySelector('#slider-theta1') as HTMLInputElement | null;
     const th2Slider = this.containerEl.querySelector('#slider-theta2') as HTMLInputElement | null;
     const th1Val = this.containerEl.querySelector('#val-theta1');
     const th2Val = this.containerEl.querySelector('#val-theta2');
 
-    const deg1 = Math.round((this.stateA.theta1 * 180) / Math.PI);
-    const deg2 = Math.round((this.stateA.theta2 * 180) / Math.PI);
+    const deg1 = Math.round((this.launchTheta1 * 180) / Math.PI);
+    const deg2 = Math.round((this.launchTheta2 * 180) / Math.PI);
     if (th1Slider) th1Slider.value = String(deg1);
     if (th2Slider) th2Slider.value = String(deg2);
     if (th1Val) th1Val.textContent = `${deg1}°`;

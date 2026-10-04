@@ -38,6 +38,12 @@ export class FractalRenderer implements Experiment {
   private isAnimPlaying = true;
   private elapsedTime = 0;
 
+  // Rendering Resolution & Performance
+  private qualityScale = 1.0;
+  private lastWidth = 800;
+  private lastHeight = 600;
+  private lastDpr = 1;
+
   // Dragging & Interaction
   private isDragging = false;
   private lastMouseX = 0;
@@ -116,8 +122,11 @@ export class FractalRenderer implements Experiment {
 
   resize(width: number, height: number, dpr: number): void {
     if (!this.gl || !this.canvas) return;
-    const renderWidth = Math.floor(width * dpr);
-    const renderHeight = Math.floor(height * dpr);
+    this.lastWidth = width;
+    this.lastHeight = height;
+    this.lastDpr = dpr;
+    const renderWidth = Math.max(1, Math.floor(width * dpr * this.qualityScale));
+    const renderHeight = Math.max(1, Math.floor(height * dpr * this.qualityScale));
 
     this.canvas.width = renderWidth;
     this.canvas.height = renderHeight;
@@ -250,6 +259,28 @@ export class FractalRenderer implements Experiment {
 
   getControlsHTML(): string {
     return `
+      <!-- Master Control: Stop / Run / Reset -->
+      <div class="control-group !border-cyan-500/40 bg-gradient-to-b from-[#131926] to-[#0a0e16]">
+        <div class="control-header">
+          <span class="control-title text-cyan-300">
+            <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            Shader Engine Control
+          </span>
+          <span id="fractal-status-badge" class="px-2 py-0.5 rounded text-[10px] font-mono ${this.isAnimPlaying ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/60' : 'bg-rose-950/60 text-rose-300 border border-rose-800/60'}">
+            ${this.isAnimPlaying ? '● GPU ACTIVE' : '❚❚ PAUSED'}
+          </span>
+        </div>
+        <div class="flex space-x-2">
+          <button id="btn-fractal-playpause" class="btn-primary flex-1 ${this.isAnimPlaying ? '!bg-rose-600 hover:!bg-rose-500' : '!bg-emerald-600 hover:!bg-emerald-500'}">
+            <span id="fractal-btn-play-text">${this.isAnimPlaying ? '❚❚ Stop Render' : '▶ Resume Render'}</span>
+          </button>
+          <button id="btn-reset-view-top" class="btn-secondary flex-1 border-cyan-700/50 hover:border-cyan-500 text-cyan-200">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+            <span>Reset View</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Presets & Types -->
       <div class="control-group">
         <div class="control-header">
@@ -356,6 +387,15 @@ export class FractalRenderer implements Experiment {
             <input type="range" id="slider-pal-speed" min="0" max="1.5" step="0.05" value="${this.paletteSpeed}">
           </div>
 
+          <div>
+            <label class="block text-xs font-mono text-slate-400 mb-1">Render Resolution / GPU Load</label>
+            <select id="quality-select">
+              <option value="1.0" ${this.qualityScale === 1.0 ? 'selected' : ''}>Native Resolution (1.0x DPR)</option>
+              <option value="0.75" ${this.qualityScale === 0.75 ? 'selected' : ''}>Balanced Quality (0.75x DPR)</option>
+              <option value="0.5" ${this.qualityScale === 0.5 ? 'selected' : ''}>Fast Performance (0.5x DPR - Low GPU Load)</option>
+            </select>
+          </div>
+
           <div class="slider-container">
             <div class="slider-label-row">
               <span>Escape Radius</span>
@@ -382,6 +422,22 @@ export class FractalRenderer implements Experiment {
 
   bindControls(container: HTMLElement): void {
     this.containerEl = container;
+
+    // Master Controls
+    const playPauseBtn = container.querySelector('#btn-fractal-playpause');
+    playPauseBtn?.addEventListener('click', () => {
+      this.togglePlay();
+    });
+
+    const resetTopBtn = container.querySelector('#btn-reset-view-top');
+    resetTopBtn?.addEventListener('click', () => this.reset());
+
+    // Quality Select
+    const qualitySelect = container.querySelector('#quality-select') as HTMLSelectElement | null;
+    qualitySelect?.addEventListener('change', () => {
+      this.qualityScale = parseFloat(qualitySelect.value);
+      this.resize(this.lastWidth, this.lastHeight, this.lastDpr);
+    });
 
     // Type selector
     const typeSelect = container.querySelector('#fractal-type-select') as HTMLSelectElement | null;
@@ -553,7 +609,7 @@ export class FractalRenderer implements Experiment {
     // Copy coords button
     const copyBtn = container.querySelector('#btn-copy-coords');
     copyBtn?.addEventListener('click', () => {
-      const text = `MathLab Fractal Location:\nType: ${this.fractalType}\nCenter: (${this.centerX}, ${this.centerY})\nZoom: ${this.zoom}\nIterations: ${this.maxIterations}`;
+      const text = `MathLab Fractal Location:\nType: ${this.fractalType}\nCenter: (${this.centerX}, ${this.centerY})\nZoom: ${this.zoomLevel}\nIterations: ${this.maxIterations}`;
       navigator.clipboard.writeText(text);
       if (copyBtn) {
         copyBtn.textContent = 'Copied!';
@@ -566,7 +622,35 @@ export class FractalRenderer implements Experiment {
       }
     });
 
+    this.updateControlsUI();
     this.updatePadCursor();
+  }
+
+  private updateControlsUI(): void {
+    if (!this.containerEl) return;
+    const badge = this.containerEl.querySelector('#fractal-status-badge');
+    const playBtn = this.containerEl.querySelector('#btn-fractal-playpause');
+    const playText = this.containerEl.querySelector('#fractal-btn-play-text');
+
+    if (badge) {
+      if (this.isAnimPlaying) {
+        badge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/60 text-emerald-300 border border-emerald-800/60';
+        badge.textContent = '● GPU ACTIVE';
+      } else {
+        badge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-rose-950/60 text-rose-300 border border-rose-800/60';
+        badge.textContent = '❚❚ PAUSED';
+      }
+    }
+
+    if (playBtn && playText) {
+      if (this.isAnimPlaying) {
+        playBtn.className = 'btn-primary flex-1 !bg-rose-600 hover:!bg-rose-500';
+        playText.textContent = '❚❚ Stop Render';
+      } else {
+        playBtn.className = 'btn-primary flex-1 !bg-emerald-600 hover:!bg-emerald-500';
+        playText.textContent = '▶ Resume Render';
+      }
+    }
   }
 
   private updatePadCursor(): void {

@@ -349,7 +349,10 @@ export class FourierRenderer implements Experiment {
 
     if (!this.isDrawing) return;
     const pt = this.screenToWorld(e.clientX, e.clientY);
-    this.userRawPoints.push(pt);
+    // Limit maximum sampled points to prevent memory hanging
+    if (this.userRawPoints.length < 1200) {
+      this.userRawPoints.push(pt);
+    }
   }
 
   onPointerUp(_e: PointerEvent): void {
@@ -400,9 +403,10 @@ export class FourierRenderer implements Experiment {
     const rmse = this.resampledPoints.length > 0 && this.fourierComponents.length > 0
       ? computeRMSE(this.resampledPoints, this.fourierComponents, count).toFixed(2)
       : '0.00';
+    const status = this.isPlayingState ? 'RUNNING' : 'STOPPED';
 
     return {
-      badge: `${count} / ${total} Harmonics • RMSE: ${rmse} px`,
+      badge: `[${status}] ${count}/${total} Harmonics • RMSE: ${rmse}px`,
       coords: `Phase: ${(this.t).toFixed(2)} rad (${((this.t / (2 * Math.PI)) * 100).toFixed(0)}%) | Direction: ${this.direction > 0 ? 'Forward' : 'Reverse'}`,
     };
   }
@@ -414,6 +418,28 @@ export class FourierRenderer implements Experiment {
       : '0.00';
 
     return `
+      <!-- Master Control: Stop / Run / Reset -->
+      <div class="control-group !border-purple-500/40 bg-gradient-to-b from-[#131926] to-[#0a0e16]">
+        <div class="control-header">
+          <span class="control-title text-purple-300">
+            <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            Epicycle Generation Control
+          </span>
+          <span id="fourier-status-badge" class="px-2 py-0.5 rounded text-[10px] font-mono ${this.isPlayingState ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/60' : 'bg-rose-950/60 text-rose-300 border border-rose-800/60'}">
+            ${this.isPlayingState ? '● GENERATING' : '❚❚ STOPPED'}
+          </span>
+        </div>
+        <div class="flex space-x-2">
+          <button id="btn-fourier-playpause" class="btn-primary flex-1 ${this.isPlayingState ? '!bg-rose-600 hover:!bg-rose-500' : '!bg-emerald-600 hover:!bg-emerald-500'}">
+            <span id="fourier-btn-play-text">${this.isPlayingState ? '❚❚ Stop Generation' : '▶ Run Generation'}</span>
+          </button>
+          <button id="btn-fourier-reset-top" class="btn-secondary flex-1 border-purple-700/50 hover:border-purple-500 text-purple-200">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+            <span>Restart (t=0)</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Presets & Freehand -->
       <div class="control-group">
         <div class="control-header">
@@ -512,6 +538,17 @@ export class FourierRenderer implements Experiment {
   bindControls(container: HTMLElement): void {
     this.containerEl = container;
 
+    // Master Controls
+    const playPauseBtn = container.querySelector('#btn-fourier-playpause');
+    playPauseBtn?.addEventListener('click', () => {
+      this.togglePlay();
+    });
+
+    const resetTopBtn = container.querySelector('#btn-fourier-reset-top');
+    resetTopBtn?.addEventListener('click', () => {
+      this.reset();
+    });
+
     // Preset selector
     const presetSelect = container.querySelector('#fourier-preset-select') as HTMLSelectElement | null;
     presetSelect?.addEventListener('change', () => {
@@ -586,6 +623,35 @@ export class FourierRenderer implements Experiment {
     toggleReconstructed?.addEventListener('change', () => {
       this.showReconstructed = toggleReconstructed.checked;
     });
+
+    this.updateControlsUI();
+  }
+
+  private updateControlsUI(): void {
+    if (!this.containerEl) return;
+    const badge = this.containerEl.querySelector('#fourier-status-badge');
+    const playBtn = this.containerEl.querySelector('#btn-fourier-playpause');
+    const playText = this.containerEl.querySelector('#fourier-btn-play-text');
+
+    if (badge) {
+      if (this.isPlayingState) {
+        badge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/60 text-emerald-300 border border-emerald-800/60';
+        badge.textContent = '● GENERATING';
+      } else {
+        badge.className = 'px-2 py-0.5 rounded text-[10px] font-mono bg-rose-950/60 text-rose-300 border border-rose-800/60';
+        badge.textContent = '❚❚ STOPPED';
+      }
+    }
+
+    if (playBtn && playText) {
+      if (this.isPlayingState) {
+        playBtn.className = 'btn-primary flex-1 !bg-rose-600 hover:!bg-rose-500';
+        playText.textContent = '❚❚ Stop Generation';
+      } else {
+        playBtn.className = 'btn-primary flex-1 !bg-emerald-600 hover:!bg-emerald-500';
+        playText.textContent = '▶ Run Generation';
+      }
+    }
   }
 
   private syncUI(): void {

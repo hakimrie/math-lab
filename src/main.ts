@@ -25,6 +25,12 @@ class MathLabApp {
   private panelControlsEl: HTMLElement;
   private panelLearnEl: HTMLElement;
 
+  // Global Header Engine Controls
+  private globalPlayPauseBtn: HTMLElement;
+  private globalResetBtn: HTMLElement;
+  private globalStatusDot: HTMLElement;
+  private globalPlayPauseText: HTMLElement;
+
   // Floating Viewport Actions
   private playPauseBtn: HTMLElement;
   private iconPause: HTMLElement;
@@ -60,6 +66,11 @@ class MathLabApp {
     this.tabLearnBtn = document.getElementById('sidebar-tab-learn')!;
     this.panelControlsEl = document.getElementById('panel-controls')!;
     this.panelLearnEl = document.getElementById('panel-learn')!;
+
+    this.globalPlayPauseBtn = document.getElementById('btn-global-playpause')!;
+    this.globalResetBtn = document.getElementById('btn-global-reset')!;
+    this.globalStatusDot = document.getElementById('global-status-dot')!;
+    this.globalPlayPauseText = document.getElementById('global-playpause-text')!;
 
     this.playPauseBtn = document.getElementById('vp-btn-playpause')!;
     this.iconPause = document.getElementById('vp-icon-pause')!;
@@ -169,6 +180,30 @@ class MathLabApp {
       this.panelControlsEl.classList.add('hidden');
     });
 
+    // Global Header Engine Controls
+    this.globalPlayPauseBtn.addEventListener('click', () => {
+      if (this.activeExperiment) {
+        this.activeExperiment.togglePlay();
+        this.updatePlayPauseIcon();
+      }
+    });
+
+    this.globalResetBtn.addEventListener('click', () => {
+      this.activeExperiment?.reset();
+      this.updatePlayPauseIcon();
+    });
+
+    // Spacebar to Pause / Resume
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'SELECT') {
+        e.preventDefault();
+        if (this.activeExperiment) {
+          this.activeExperiment.togglePlay();
+          this.updatePlayPauseIcon();
+        }
+      }
+    });
+
     // Viewport Quick Actions
     this.playPauseBtn.addEventListener('click', () => {
       if (this.activeExperiment) {
@@ -179,6 +214,7 @@ class MathLabApp {
 
     this.resetBtn.addEventListener('click', () => {
       this.activeExperiment?.reset();
+      this.updatePlayPauseIcon();
     });
 
     this.zoomInBtn.addEventListener('click', () => {
@@ -212,12 +248,25 @@ class MathLabApp {
   private updatePlayPauseIcon(): void {
     if (!this.activeExperiment) return;
     const playing = this.activeExperiment.isPlaying();
+
+    // Floating viewport icons
     if (playing) {
       this.iconPause.classList.remove('hidden');
       this.iconPlay.classList.add('hidden');
     } else {
       this.iconPause.classList.add('hidden');
       this.iconPlay.classList.remove('hidden');
+    }
+
+    // Header global status indicator
+    if (playing) {
+      this.globalStatusDot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+      this.globalPlayPauseText.textContent = 'Stop';
+      this.globalPlayPauseBtn.className = 'px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors bg-rose-600/30 text-rose-300 hover:bg-rose-600/50 border border-rose-500/30';
+    } else {
+      this.globalStatusDot.className = 'w-2 h-2 rounded-full bg-rose-500';
+      this.globalPlayPauseText.textContent = 'Run';
+      this.globalPlayPauseBtn.className = 'px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors bg-emerald-600/30 text-emerald-300 hover:bg-emerald-600/50 border border-emerald-500/30';
     }
   }
 
